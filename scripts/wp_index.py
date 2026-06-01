@@ -432,5 +432,85 @@ def detect_rest_api(api_base, headers):
         return False
 
 
+def main(argv=None):
+    parser = argparse.ArgumentParser(
+        description="Extract and index a WordPress site via its REST API."
+    )
+    parser.add_argument("--site", required=True, help="Base site URL, e.g. https://example.com")
+    parser.add_argument("--type", default="posts,pages",
+                        help="Comma list of REST bases, or 'all' for every public type")
+    parser.add_argument("--out", default=None, help="Output directory")
+    parser.add_argument("--since", default=None, help="Flag items not modified since YYYY-MM-DD")
+    parser.add_argument("--fresh", action="store_true", help="Ignore checkpoints")
+    parser.add_argument("--delay", type=float, default=1.0, help="Seconds between requests")
+    parser.add_argument("--per-page", type=int, default=50, dest="per_page")
+    parser.add_argument("--drafts", action="store_true", help="Include drafts (needs auth)")
+    parser.add_argument("--no-score", action="store_true", dest="no_score")
+    args = parser.parse_args(argv)
+
+    site = args.site.rstrip("/")
+    api_base = "%s/wp-json/wp/v2" % site
+    domain = urllib.parse.urlparse(site).netloc or "site"
+    out_dir = args.out or ("./%s-wp-index" % domain)
+    checkpoint_dir = os.path.join(out_dir, ".checkpoints")
+
+    user = os.environ.get("WP_USER")
+    app_password = os.environ.get("WP_APP_PASSWORD")
+    auth_enabled = bool(user and app_password)
+    headers = build_headers(user, app_password)
+
+    if args.drafts and not auth_enabled:
+        print("WARNING: --drafts needs WP_USER / WP_APP_PASSWORD; running public mode.")
+
+    if not detect_rest_api(api_base, headers):
+        print("ERROR: %s does not look like a REST-enabled WordPress site "
+              "(no /wp-json/wp/v2)." % site)
+        return 2
+
+    if args.fresh:
+        clear_checkpoints(checkpoint_dir)
+
+    if args.type == "all":
+        types_json, _ = fetch_json("%s/types" % api_base, headers)
+        rest_bases = parse_public_types(types_json)
+    else:
+        rest_bases = [t.strip() for t in args.type.split(",") if t.strip()]
+
+    users_by_id = fetch_users(api_base, headers, delay=args.delay) if auth_enabled else {}
+
+    archive = {"site": site, "types": {}}
+    records_by_type = {}
+    for rest_base in rest_bases:
+        cached = None if args.fresh else load_checkpoint(checkpoint_dir, "items_%s" % rest_base)
+        if cached is not None:
+            raw_items = cached
+            print("  Loaded checkpoint for %s (%d items)" % (rest_base, len(raw_items)))
+        else:
+            raw_items = fetch_all(
+                api_base, rest_base, headers, per_page=args.per_page, delay=args.delay,
+                include_drafts=args.drafts and auth_enabled, log=print,
+            )
+            save_checkpoint(checkpoint_dir, "items_%s" % rest_base, raw_items)
+        records = [
+            build_record(item, rest_base, users_by_id, args.since, not args.no_score)
+            for item in raw_items
+        ]
+        records_by_type[rest_base] = records
+        archive["types"][rest_base] = records
+        write_markdown_files(out_dir, rest_base, records)
+        write_csv(out_dir, rest_base, records)
+        print("  %s: %d items" % (rest_base, len(records)))
+
+    all_records = [r for records in records_by_type.values() for r in records]
+    write_json_archive(out_dir, archive)
+    write_knowledge_base(out_dir, all_records)
+    xlsx_path = write_xlsx_if_available(out_dir, records_by_type)
+
+    print("\nDone. %d items across %d type(s) -> %s"
+          % (len(all_records), len(records_by_type), out_dir))
+    print("  XLSX: %s" % xlsx_path if xlsx_path else "  (XLSX skipped; openpyxl not installed)")
+    return 0
+
+
 if __name__ == "__main__":
-    sys.exit(0)
+    sys.exit(main())

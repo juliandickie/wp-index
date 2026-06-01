@@ -11,3 +11,6 @@ venv/
 
 # OS
 .DS_Store
+
+# Local-only design notes (spec, plan) — kept on disk, out of the published repo
+docs/

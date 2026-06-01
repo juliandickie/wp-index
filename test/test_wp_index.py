@@ -96,6 +96,10 @@ class TestAuthorAndTypes(unittest.TestCase):
         }
         self.assertEqual(wp_index.parse_public_types(types_json), ["posts", "pages"])
 
+    def test_author_non_dict_embed(self):
+        item = {"author": 9, "_embedded": {"author": ["oops"]}}
+        self.assertEqual(wp_index.resolve_author(item, {}), "Author 9")
+
 
 import json as _json
 
@@ -149,6 +153,12 @@ class TestRenderers(unittest.TestCase):
         self.assertIn("Total items: 1", kb)
         self.assertIn("## Sample Title", kb)
 
+    def test_markdown_escapes_url(self):
+        rec = self._record()
+        rec["url"] = "https://x.com/?a=1: 2"
+        md = wp_index.markdown_for_record(rec)
+        self.assertIn('url: "https://x.com/?a=1: 2"', md)
+
 
 import csv as _csv
 import tempfile
@@ -186,6 +196,16 @@ class TestWriters(unittest.TestCase):
             self.assertEqual(len(paths), 1)
             self.assertTrue(os.path.exists(paths[0]))
             self.assertTrue(paths[0].endswith("2024-03-15_sample.md"))
+
+    def test_markdown_filename_collision(self):
+        with tempfile.TemporaryDirectory() as d:
+            r1 = self._record()
+            r2 = dict(self._record())
+            r2["id"] = 102
+            paths = wp_index.write_markdown_files(d, "posts", [r1, r2])
+            self.assertEqual(len(paths), 2)
+            self.assertEqual(len(set(paths)), 2)
+            self.assertTrue(all(os.path.exists(p) for p in paths))
 
 
 class TestCheckpoints(unittest.TestCase):
@@ -225,6 +245,18 @@ class TestHttp(unittest.TestCase):
             data, headers = wp_index.fetch_json("https://x/wp-json/wp/v2/posts", {})
         self.assertEqual(data, {"hello": "world"})
         self.assertEqual(headers.get("x-wp-totalpages"), "3")
+
+    def test_fetch_json_retries_on_503(self):
+        fake = mock.MagicMock()
+        fake.read.return_value = b'{"ok": true}'
+        fake.headers.items.return_value = []
+        cm = mock.MagicMock()
+        cm.__enter__.return_value = fake
+        err = wp_index.urllib.error.HTTPError("u", 503, "busy", {}, None)
+        with mock.patch("wp_index.urllib.request.urlopen", side_effect=[err, cm]), \
+             mock.patch("wp_index.time.sleep"):
+            data, _ = wp_index.fetch_json("https://x", {}, delay=0)
+        self.assertEqual(data, {"ok": True})
 
     def test_fetch_all_paginates(self):
         pages = {

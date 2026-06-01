@@ -163,7 +163,7 @@ def resolve_author(item, users_by_id):
     if users_by_id and author_id in users_by_id:
         return users_by_id[author_id]
     embedded = (item.get("_embedded") or {}).get("author")
-    if embedded and isinstance(embedded, list) and embedded[0].get("name"):
+    if embedded and isinstance(embedded, list) and isinstance(embedded[0], dict) and embedded[0].get("name"):
         return embedded[0]["name"]
     if author_id is not None:
         return "Author %s" % author_id
@@ -222,7 +222,7 @@ def markdown_for_record(record):
     lines.append("type: %s" % record.get("type", ""))
     lines.append("slug: %s" % record.get("slug", ""))
     lines.append("status: %s" % record.get("status", ""))
-    lines.append("url: %s" % record.get("url", ""))
+    lines.append("url: %s" % json.dumps(record.get("url", "")))
     lines.append("date: %s" % record.get("date", ""))
     lines.append("modified: %s" % record.get("modified", ""))
     lines.append("author: %s" % json.dumps(record.get("author", "")))
@@ -275,10 +275,15 @@ def write_markdown_files(out_dir, type_name, records):
     type_dir = os.path.join(out_dir, type_name)
     os.makedirs(type_dir, exist_ok=True)
     paths = []
+    used = set()
     for r in records:
         date_part = (r.get("date") or "")[:10]
         slug = r.get("slug") or slugify(r.get("title", "")) or str(r.get("id"))
-        name = ("%s_%s.md" % (date_part, slug)) if date_part else ("%s.md" % slug)
+        base = ("%s_%s" % (date_part, slug)) if date_part else slug
+        name = base + ".md"
+        if name in used:
+            name = "%s_%s.md" % (base, r.get("id"))
+        used.add(name)
         path = os.path.join(type_dir, name)
         with open(path, "w", encoding="utf-8") as f:
             f.write(markdown_for_record(r))
@@ -454,6 +459,10 @@ def main(argv=None):
     out_dir = args.out or ("./%s-wp-index" % domain)
     checkpoint_dir = os.path.join(out_dir, ".checkpoints")
 
+    if args.per_page > 100:
+        print("  NOTE: --per-page capped at 100 (WordPress maximum); using 100.")
+        args.per_page = 100
+
     user = os.environ.get("WP_USER")
     app_password = os.environ.get("WP_APP_PASSWORD")
     auth_enabled = bool(user and app_password)
@@ -471,8 +480,12 @@ def main(argv=None):
         clear_checkpoints(checkpoint_dir)
 
     if args.type == "all":
-        types_json, _ = fetch_json("%s/types" % api_base, headers)
-        rest_bases = parse_public_types(types_json)
+        try:
+            types_json, _ = fetch_json("%s/types" % api_base, headers)
+            rest_bases = parse_public_types(types_json)
+        except Exception as err:
+            print("  WARNING: could not enumerate post types (%s); falling back to posts,pages." % err)
+            rest_bases = ["posts", "pages"]
     else:
         rest_bases = [t.strip() for t in args.type.split(",") if t.strip()]
 
@@ -491,10 +504,14 @@ def main(argv=None):
                 include_drafts=args.drafts and auth_enabled, log=print,
             )
             save_checkpoint(checkpoint_dir, "items_%s" % rest_base, raw_items)
-        records = [
-            build_record(item, rest_base, users_by_id, args.since, not args.no_score)
-            for item in raw_items
-        ]
+        records = []
+        for item in raw_items:
+            try:
+                records.append(
+                    build_record(item, rest_base, users_by_id, args.since, not args.no_score)
+                )
+            except Exception as err:
+                print("  WARNING: skipped %s item id=%s (%s)" % (rest_base, item.get("id"), err))
         records_by_type[rest_base] = records
         archive["types"][rest_base] = records
         write_markdown_files(out_dir, rest_base, records)

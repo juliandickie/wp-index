@@ -29,5 +29,48 @@ def slugify(text, max_length=80):
     return text
 
 
+def grade_for_score(score):
+    if score >= 90:
+        return "A"
+    if score >= 80:
+        return "B"
+    if score >= 70:
+        return "C"
+    if score >= 60:
+        return "D"
+    return "F"
+
+
+def score_seo(title, meta, slug):
+    title = title or ""
+    meta = meta or ""
+    slug = slug or ""
+    score = 0
+
+    tlen = len(title)
+    if 30 <= tlen <= 60:
+        score += 40
+    elif tlen >= 20:
+        score += 25
+    elif tlen > 0:
+        score += 10
+
+    mlen = len(meta)
+    if 50 <= mlen <= 160:
+        score += 40
+    elif mlen > 0:
+        score += 20
+
+    slen = len(slug)
+    if slen == 0:
+        score += 0
+    elif slen <= 60:
+        score += 20
+    else:
+        score += 10
+
+    return score, grade_for_score(score)
+
+
 if __name__ == "__main__":
     sys.exit(0)

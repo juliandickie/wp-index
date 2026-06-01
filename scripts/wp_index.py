@@ -209,5 +209,48 @@ def build_record(item, type_name, users_by_id, since_date, do_score):
     return record
 
 
+CSV_FIELDS = [
+    "id", "type", "title", "slug", "status", "url", "date", "modified",
+    "author", "word_count", "seo_score", "seo_grade", "stale",
+]
+
+
+def markdown_for_record(record):
+    lines = ["---"]
+    lines.append("title: %s" % json.dumps(record.get("title", "")))
+    lines.append("id: %s" % record.get("id"))
+    lines.append("type: %s" % record.get("type", ""))
+    lines.append("slug: %s" % record.get("slug", ""))
+    lines.append("status: %s" % record.get("status", ""))
+    lines.append("url: %s" % record.get("url", ""))
+    lines.append("date: %s" % record.get("date", ""))
+    lines.append("modified: %s" % record.get("modified", ""))
+    lines.append("author: %s" % json.dumps(record.get("author", "")))
+    if "seo_score" in record:
+        lines.append("seo_score: %s" % record["seo_score"])
+        lines.append("seo_grade: %s" % record["seo_grade"])
+    lines.append("stale: %s" % ("true" if record.get("stale") else "false"))
+    lines.append("---")
+    body = "# %s\n\n%s\n" % (record.get("title", ""), record.get("content_markdown", ""))
+    return "\n".join(lines) + "\n\n" + body
+
+
+def knowledge_base_markdown(records):
+    lines = ["# Content Knowledge Base", "", "Total items: %d" % len(records), ""]
+    for r in records:
+        lines.append("## %s" % r.get("title", ""))
+        lines.append("")
+        lines.append("- Type: %s" % r.get("type", ""))
+        lines.append("- URL: %s" % r.get("url", ""))
+        lines.append("- Author: %s" % r.get("author", ""))
+        if "seo_grade" in r:
+            lines.append("- SEO: %s (%s)" % (r.get("seo_score"), r.get("seo_grade")))
+        lines.append("")
+        if r.get("excerpt"):
+            lines.append(r["excerpt"])
+            lines.append("")
+    return "\n".join(lines)
+
+
 if __name__ == "__main__":
     sys.exit(0)

@@ -124,5 +124,31 @@ class TestBuildRecord(unittest.TestCase):
         self.assertNotIn("seo_score", record)
 
 
+class TestRenderers(unittest.TestCase):
+    def _record(self):
+        return {
+            "id": 101, "type": "posts", "title": "Sample Title", "slug": "sample",
+            "status": "publish", "url": "https://example.com/sample/",
+            "date": "2024-03-15T09:30:00", "modified": "2024-03-20T11:00:00",
+            "author": "Jane Doe", "excerpt": "A summary.", "word_count": 3,
+            "content_markdown": "Body text.", "stale": False,
+            "seo_score": 80, "seo_grade": "B",
+        }
+
+    def test_markdown_has_frontmatter_and_body(self):
+        md = wp_index.markdown_for_record(self._record())
+        self.assertTrue(md.startswith("---\n"))
+        self.assertIn('title: "Sample Title"', md)
+        self.assertIn("seo_grade: B", md)
+        self.assertIn("# Sample Title", md)
+        self.assertIn("Body text.", md)
+
+    def test_knowledge_base(self):
+        kb = wp_index.knowledge_base_markdown([self._record()])
+        self.assertIn("# Content Knowledge Base", kb)
+        self.assertIn("Total items: 1", kb)
+        self.assertIn("## Sample Title", kb)
+
+
 if __name__ == "__main__":
     unittest.main()

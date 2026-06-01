@@ -97,5 +97,32 @@ class TestAuthorAndTypes(unittest.TestCase):
         self.assertEqual(wp_index.parse_public_types(types_json), ["posts", "pages"])
 
 
+import json as _json
+
+
+class TestBuildRecord(unittest.TestCase):
+    def _load(self):
+        path = os.path.join(os.path.dirname(__file__), "fixtures", "sample_post.json")
+        with open(path, encoding="utf-8") as f:
+            return _json.load(f)
+
+    def test_fields(self):
+        record = wp_index.build_record(self._load(), "posts", {7: "Jane Doe"}, None, True)
+        self.assertEqual(record["id"], 101)
+        self.assertEqual(record["type"], "posts")
+        self.assertEqual(record["title"], "A Sample & Real Post")
+        self.assertEqual(record["author"], "Jane Doe")
+        self.assertEqual(record["slug"], "sample-post")
+        self.assertEqual(record["content_markdown"], "Body **text** here.")
+        self.assertEqual(record["excerpt"], "Short summary of the post.")
+        self.assertEqual(record["word_count"], 3)
+        self.assertIn("seo_score", record)
+        self.assertFalse(record["stale"])
+
+    def test_no_score(self):
+        record = wp_index.build_record(self._load(), "posts", {}, None, False)
+        self.assertNotIn("seo_score", record)
+
+
 if __name__ == "__main__":
     unittest.main()

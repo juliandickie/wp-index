@@ -179,5 +179,35 @@ def parse_public_types(types_json):
     return bases
 
 
+def build_record(item, type_name, users_by_id, since_date, do_score):
+    title = html.unescape((item.get("title") or {}).get("rendered", "") or "")
+    content_html = (item.get("content") or {}).get("rendered", "") or ""
+    excerpt_html = (item.get("excerpt") or {}).get("rendered", "") or ""
+    slug = item.get("slug", "") or ""
+    content_md = html_to_markdown(content_html)
+    excerpt_md = html_to_markdown(excerpt_html)
+
+    record = {
+        "id": item.get("id"),
+        "type": type_name,
+        "title": title,
+        "slug": slug,
+        "status": item.get("status", ""),
+        "url": item.get("link", ""),
+        "date": item.get("date", ""),
+        "modified": item.get("modified", ""),
+        "author": resolve_author(item, users_by_id),
+        "excerpt": excerpt_md,
+        "word_count": len(content_md.split()),
+        "content_markdown": content_md,
+        "stale": is_stale(item.get("modified", ""), since_date),
+    }
+    if do_score:
+        score, grade = score_seo(title, excerpt_md, slug)
+        record["seo_score"] = score
+        record["seo_grade"] = grade
+    return record
+
+
 if __name__ == "__main__":
     sys.exit(0)

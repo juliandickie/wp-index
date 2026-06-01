@@ -1,0 +1,12 @@
+{
+  "id": 101,
+  "slug": "sample-post",
+  "status": "publish",
+  "link": "https://example.com/sample-post/",
+  "date": "2024-03-15T09:30:00",
+  "modified": "2024-03-20T11:00:00",
+  "author": 7,
+  "title": { "rendered": "A Sample &amp; Real Post" },
+  "excerpt": { "rendered": "<p>Short summary of the post.</p>" },
+  "content": { "rendered": "<p>Body <strong>text</strong> here.</p>" }
+}

@@ -258,6 +258,20 @@ class TestHttp(unittest.TestCase):
             data, _ = wp_index.fetch_json("https://x", {}, delay=0)
         self.assertEqual(data, {"ok": True})
 
+    def test_fetch_json_retries_on_timeout(self):
+        # A read timeout raises TimeoutError (an OSError, not a URLError); it must be
+        # caught and retried, not crash the run. Regression for the live-run failure.
+        fake = mock.MagicMock()
+        fake.read.return_value = b'{"ok": true}'
+        fake.headers.items.return_value = []
+        cm = mock.MagicMock()
+        cm.__enter__.return_value = fake
+        with mock.patch("wp_index.urllib.request.urlopen",
+                        side_effect=[TimeoutError("read timed out"), cm]), \
+             mock.patch("wp_index.time.sleep"):
+            data, _ = wp_index.fetch_json("https://x", {}, delay=0)
+        self.assertEqual(data, {"ok": True})
+
     def test_fetch_all_paginates(self):
         pages = {
             1: ([{"id": 1}, {"id": 2}], {"x-wp-totalpages": "2"}),

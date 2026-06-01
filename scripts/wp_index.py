@@ -359,12 +359,15 @@ def build_headers(user=None, app_password=None):
     return headers
 
 
+REQUEST_TIMEOUT = 120  # seconds; embed-heavy WordPress responses can be slow to generate
+
+
 def fetch_json(url, headers, max_retries=4, delay=1.0):
     last_err = None
     for attempt in range(max_retries):
         request = urllib.request.Request(url, headers=headers)
         try:
-            with urllib.request.urlopen(request, timeout=60) as resp:
+            with urllib.request.urlopen(request, timeout=REQUEST_TIMEOUT) as resp:
                 body = resp.read().decode("utf-8")
                 resp_headers = {k.lower(): v for k, v in resp.headers.items()}
                 return json.loads(body), resp_headers
@@ -376,7 +379,11 @@ def fetch_json(url, headers, max_retries=4, delay=1.0):
                 time.sleep(min(wait, 30))
                 continue
             raise
-        except urllib.error.URLError as err:
+        except OSError as err:
+            # URLError, TimeoutError, ConnectionError and other socket errors are
+            # transient; retry with exponential backoff. TimeoutError is an OSError
+            # but NOT a URLError, so it must be caught here (a read timeout on a slow
+            # embed-heavy response would otherwise escape and crash the whole run).
             last_err = err
             time.sleep(delay * (2 ** attempt))
     raise last_err
@@ -495,16 +502,22 @@ def main(argv=None):
 
     archive = {"site": site, "types": {}}
     records_by_type = {}
+    failed_types = []
     for rest_base in rest_bases:
         cached = None if args.fresh else load_checkpoint(checkpoint_dir, "items_%s" % rest_base)
         if cached is not None:
             raw_items = cached
             print("  Loaded checkpoint for %s (%d items)" % (rest_base, len(raw_items)))
         else:
-            raw_items = fetch_all(
-                api_base, rest_base, headers, per_page=args.per_page, delay=args.delay,
-                include_drafts=args.drafts and auth_enabled, log=print,
-            )
+            try:
+                raw_items = fetch_all(
+                    api_base, rest_base, headers, per_page=args.per_page, delay=args.delay,
+                    include_drafts=args.drafts and auth_enabled, log=print,
+                )
+            except Exception as err:
+                print("  ERROR: failed to fetch %s after retries (%s); skipping this type." % (rest_base, err))
+                failed_types.append(rest_base)
+                continue
             save_checkpoint(checkpoint_dir, "items_%s" % rest_base, raw_items)
         records = []
         for item in raw_items:
@@ -528,6 +541,10 @@ def main(argv=None):
     print("\nDone. %d items across %d type(s) -> %s"
           % (len(all_records), len(records_by_type), out_dir))
     print("  XLSX: %s" % xlsx_path if xlsx_path else "  (XLSX skipped; openpyxl not installed)")
+    if failed_types:
+        print("  WARNING: %d type(s) failed and were skipped: %s"
+              % (len(failed_types), ", ".join(failed_types)))
+        return 1
     return 0
 
 

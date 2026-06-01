@@ -448,9 +448,11 @@ def main(argv=None):
     parser.add_argument("--since", default=None, help="Flag items not modified since YYYY-MM-DD")
     parser.add_argument("--fresh", action="store_true", help="Ignore checkpoints")
     parser.add_argument("--delay", type=float, default=1.0, help="Seconds between requests")
-    parser.add_argument("--per-page", type=int, default=50, dest="per_page")
+    parser.add_argument("--per-page", type=int, default=50, dest="per_page",
+                        help="Items per API page (max 100)")
     parser.add_argument("--drafts", action="store_true", help="Include drafts (needs auth)")
-    parser.add_argument("--no-score", action="store_true", dest="no_score")
+    parser.add_argument("--no-score", action="store_true", dest="no_score",
+                        help="Skip SEO scoring")
     args = parser.parse_args(argv)
 
     site = args.site.rstrip("/")

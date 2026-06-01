@@ -12,7 +12,7 @@ The pure functions (`slugify`, `html_to_markdown`, `score_seo`, `build_record`, 
 
 ## Origin
 
-Generalised from `idd-blog-index/extract-wp-blogs.py`. All iDD-specific logic (fixed site URL, iDD-specific post types, Hubstaff-linked output paths) was removed. The generic version accepts any site, any post type, and any output directory.
+Generalised from `idd-blog-index/extract-wp-blogs.py`. All iDD-specific logic (fixed site URL, a hardcoded author map, the iDD page-type classifier, and iDD-prefixed output filenames) was removed. The generic version accepts any site, any post type, and any output directory.
 
 ## Running the tests
 

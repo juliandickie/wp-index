@@ -1,0 +1,24 @@
+{
+  "name": "wp-index",
+  "owner": {
+    "name": "Julian Dickie",
+    "url": "https://github.com/juliandickie"
+  },
+  "metadata": {
+    "description": "Extract and index any WordPress site via its REST API.",
+    "version": "0.1.0"
+  },
+  "plugins": [
+    {
+      "name": "wp-index",
+      "source": "./",
+      "description": "Extract and index any WordPress site through its REST API. Per-item Markdown, CSV, JSON archive, and a Claude knowledge-base file. Stdlib Python, zero install. Supply your own site URL and optional Application Password.",
+      "author": { "name": "Julian Dickie", "url": "https://github.com/juliandickie" },
+      "homepage": "https://github.com/juliandickie/wp-index",
+      "repository": "https://github.com/juliandickie/wp-index",
+      "license": "MIT",
+      "category": "productivity",
+      "keywords": ["wordpress", "wp-json", "rest-api", "extract", "archive", "seo", "content-audit"]
+    }
+  ]
+}

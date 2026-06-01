@@ -252,5 +252,65 @@ def knowledge_base_markdown(records):
     return "\n".join(lines)
 
 
+def write_csv(out_dir, type_name, records):
+    path = os.path.join(out_dir, "index", "%s-index.csv" % type_name)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=CSV_FIELDS, extrasaction="ignore")
+        writer.writeheader()
+        for r in records:
+            writer.writerow(r)
+    return path
+
+
+def write_json_archive(out_dir, data):
+    path = os.path.join(out_dir, "index", "archive.json")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2, default=str)
+    return path
+
+
+def write_markdown_files(out_dir, type_name, records):
+    type_dir = os.path.join(out_dir, type_name)
+    os.makedirs(type_dir, exist_ok=True)
+    paths = []
+    for r in records:
+        date_part = (r.get("date") or "")[:10]
+        slug = r.get("slug") or slugify(r.get("title", "")) or str(r.get("id"))
+        name = ("%s_%s.md" % (date_part, slug)) if date_part else ("%s.md" % slug)
+        path = os.path.join(type_dir, name)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(markdown_for_record(r))
+        paths.append(path)
+    return paths
+
+
+def write_knowledge_base(out_dir, records):
+    path = os.path.join(out_dir, "index", "knowledge-base.md")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(knowledge_base_markdown(records))
+    return path
+
+
+def write_xlsx_if_available(out_dir, records_by_type):
+    try:
+        from openpyxl import Workbook
+    except ImportError:
+        return None
+    workbook = Workbook()
+    workbook.remove(workbook.active)
+    for type_name, records in records_by_type.items():
+        sheet = workbook.create_sheet(title=(type_name[:31] or "sheet"))
+        sheet.append(CSV_FIELDS)
+        for r in records:
+            sheet.append([r.get(k, "") for k in CSV_FIELDS])
+    path = os.path.join(out_dir, "index", "index.xlsx")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    workbook.save(path)
+    return path
+
+
 if __name__ == "__main__":
     sys.exit(0)

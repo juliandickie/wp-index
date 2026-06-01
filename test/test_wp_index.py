@@ -150,5 +150,43 @@ class TestRenderers(unittest.TestCase):
         self.assertIn("## Sample Title", kb)
 
 
+import csv as _csv
+import tempfile
+
+
+class TestWriters(unittest.TestCase):
+    def _record(self):
+        return {
+            "id": 101, "type": "posts", "title": "Sample Title", "slug": "sample",
+            "status": "publish", "url": "https://example.com/sample/",
+            "date": "2024-03-15T09:30:00", "modified": "2024-03-20T11:00:00",
+            "author": "Jane Doe", "excerpt": "A summary.", "word_count": 3,
+            "content_markdown": "Body text.", "stale": False,
+            "seo_score": 80, "seo_grade": "B",
+        }
+
+    def test_csv_roundtrip(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = wp_index.write_csv(d, "posts", [self._record()])
+            with open(path, encoding="utf-8") as f:
+                rows = list(_csv.DictReader(f))
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["title"], "Sample Title")
+
+    def test_json_archive_roundtrip(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = wp_index.write_json_archive(d, {"site": "x", "n": 1})
+            with open(path, encoding="utf-8") as f:
+                data = _json.load(f)
+            self.assertEqual(data["n"], 1)
+
+    def test_markdown_files_written(self):
+        with tempfile.TemporaryDirectory() as d:
+            paths = wp_index.write_markdown_files(d, "posts", [self._record()])
+            self.assertEqual(len(paths), 1)
+            self.assertTrue(os.path.exists(paths[0]))
+            self.assertTrue(paths[0].endswith("2024-03-15_sample.md"))
+
+
 if __name__ == "__main__":
     unittest.main()

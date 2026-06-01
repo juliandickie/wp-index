@@ -312,5 +312,33 @@ def write_xlsx_if_available(out_dir, records_by_type):
     return path
 
 
+def checkpoint_path(checkpoint_dir, name):
+    return os.path.join(checkpoint_dir, "%s.json" % name)
+
+
+def save_checkpoint(checkpoint_dir, name, data):
+    os.makedirs(checkpoint_dir, exist_ok=True)
+    with open(checkpoint_path(checkpoint_dir, name), "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, default=str)
+
+
+def load_checkpoint(checkpoint_dir, name):
+    path = checkpoint_path(checkpoint_dir, name)
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except (json.JSONDecodeError, IOError):
+        return None
+
+
+def clear_checkpoints(checkpoint_dir):
+    if os.path.isdir(checkpoint_dir):
+        for name in os.listdir(checkpoint_dir):
+            if name.endswith(".json"):
+                os.remove(os.path.join(checkpoint_dir, name))
+
+
 if __name__ == "__main__":
     sys.exit(0)

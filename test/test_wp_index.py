@@ -188,5 +188,19 @@ class TestWriters(unittest.TestCase):
             self.assertTrue(paths[0].endswith("2024-03-15_sample.md"))
 
 
+class TestCheckpoints(unittest.TestCase):
+    def test_roundtrip(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.assertIsNone(wp_index.load_checkpoint(d, "items_posts"))
+            wp_index.save_checkpoint(d, "items_posts", [{"id": 1}])
+            self.assertEqual(wp_index.load_checkpoint(d, "items_posts"), [{"id": 1}])
+
+    def test_clear(self):
+        with tempfile.TemporaryDirectory() as d:
+            wp_index.save_checkpoint(d, "items_posts", [1])
+            wp_index.clear_checkpoints(d)
+            self.assertIsNone(wp_index.load_checkpoint(d, "items_posts"))
+
+
 if __name__ == "__main__":
     unittest.main()

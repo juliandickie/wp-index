@@ -72,5 +72,25 @@ def score_seo(title, meta, slug):
     return score, grade_for_score(score)
 
 
+def parse_wp_date(value):
+    if not value:
+        return None
+    value = value.split("T")[0]
+    try:
+        return datetime.strptime(value, "%Y-%m-%d").date()
+    except ValueError:
+        return None
+
+
+def is_stale(modified_iso, since_date):
+    if not since_date:
+        return False
+    modified = parse_wp_date(modified_iso)
+    threshold = parse_wp_date(since_date)
+    if not modified or not threshold:
+        return False
+    return modified < threshold
+
+
 if __name__ == "__main__":
     sys.exit(0)

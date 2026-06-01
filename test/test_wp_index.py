@@ -35,5 +35,16 @@ class TestSeo(unittest.TestCase):
         self.assertEqual(grade, "D")
 
 
+class TestStale(unittest.TestCase):
+    def test_older_is_stale(self):
+        self.assertTrue(wp_index.is_stale("2024-06-01T10:00:00", "2025-01-01"))
+
+    def test_newer_is_not_stale(self):
+        self.assertFalse(wp_index.is_stale("2025-06-01T10:00:00", "2025-01-01"))
+
+    def test_no_threshold_never_stale(self):
+        self.assertFalse(wp_index.is_stale("2000-01-01T00:00:00", None))
+
+
 if __name__ == "__main__":
     unittest.main()

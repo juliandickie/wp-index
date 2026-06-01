@@ -92,5 +92,71 @@ def is_stale(modified_iso, since_date):
     return modified < threshold
 
 
+class _MarkdownParser(HTMLParser):
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.parts = []
+        self._list_stack = []
+        self._href = None
+
+    def handle_starttag(self, tag, attrs):
+        if tag in ("strong", "b"):
+            self.parts.append("**")
+        elif tag in ("em", "i"):
+            self.parts.append("*")
+        elif tag in ("h1", "h2", "h3", "h4", "h5", "h6"):
+            self.parts.append("\n\n" + "#" * int(tag[1]) + " ")
+        elif tag == "p":
+            self.parts.append("\n\n")
+        elif tag == "br":
+            self.parts.append("\n")
+        elif tag == "blockquote":
+            self.parts.append("\n\n> ")
+        elif tag in ("ul", "ol"):
+            self._list_stack.append(tag)
+            self.parts.append("\n")
+        elif tag == "li":
+            ordered = self._list_stack[-1:] == ["ol"]
+            self.parts.append("\n" + ("1. " if ordered else "- "))
+        elif tag == "a":
+            self._href = dict(attrs).get("href")
+            self.parts.append("[")
+        elif tag in ("code", "pre"):
+            self.parts.append("`")
+
+    def handle_endtag(self, tag):
+        if tag in ("strong", "b"):
+            self.parts.append("**")
+        elif tag in ("em", "i"):
+            self.parts.append("*")
+        elif tag in ("h1", "h2", "h3", "h4", "h5", "h6"):
+            self.parts.append("\n")
+        elif tag == "p":
+            self.parts.append("\n")
+        elif tag in ("ul", "ol"):
+            if self._list_stack:
+                self._list_stack.pop()
+            self.parts.append("\n")
+        elif tag == "a":
+            self.parts.append("](%s)" % (self._href or ""))
+            self._href = None
+        elif tag in ("code", "pre"):
+            self.parts.append("`")
+
+    def handle_data(self, data):
+        self.parts.append(data)
+
+
+def html_to_markdown(html_str):
+    if not html_str:
+        return ""
+    parser = _MarkdownParser()
+    parser.feed(html_str)
+    text = "".join(parser.parts)
+    text = re.sub(r"[ \t]+\n", "\n", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
+
+
 if __name__ == "__main__":
     sys.exit(0)

@@ -46,5 +46,34 @@ class TestStale(unittest.TestCase):
         self.assertFalse(wp_index.is_stale("2000-01-01T00:00:00", None))
 
 
+class TestHtml(unittest.TestCase):
+    def test_bold_in_paragraph(self):
+        self.assertEqual(
+            wp_index.html_to_markdown("<p>Hello <strong>world</strong>.</p>"),
+            "Hello **world**.",
+        )
+
+    def test_heading_then_paragraph(self):
+        self.assertEqual(
+            wp_index.html_to_markdown("<h2>Title</h2><p>Body</p>"),
+            "## Title\n\nBody",
+        )
+
+    def test_link(self):
+        self.assertEqual(
+            wp_index.html_to_markdown("<a href='https://x.com'>link</a>"),
+            "[link](https://x.com)",
+        )
+
+    def test_unordered_list(self):
+        self.assertEqual(
+            wp_index.html_to_markdown("<ul><li>one</li><li>two</li></ul>"),
+            "- one\n- two",
+        )
+
+    def test_empty(self):
+        self.assertEqual(wp_index.html_to_markdown(""), "")
+
+
 if __name__ == "__main__":
     unittest.main()

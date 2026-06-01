@@ -75,5 +75,27 @@ class TestHtml(unittest.TestCase):
         self.assertEqual(wp_index.html_to_markdown(""), "")
 
 
+class TestAuthorAndTypes(unittest.TestCase):
+    def test_author_from_map(self):
+        item = {"author": 7}
+        self.assertEqual(wp_index.resolve_author(item, {7: "Jane Doe"}), "Jane Doe")
+
+    def test_author_from_embed(self):
+        item = {"author": 7, "_embedded": {"author": [{"name": "Embed Name"}]}}
+        self.assertEqual(wp_index.resolve_author(item, {}), "Embed Name")
+
+    def test_author_fallback(self):
+        self.assertEqual(wp_index.resolve_author({"author": 9}, {}), "Author 9")
+
+    def test_parse_public_types(self):
+        types_json = {
+            "post": {"rest_base": "posts"},
+            "page": {"rest_base": "pages"},
+            "attachment": {"rest_base": "media"},
+            "nav_menu_item": {},
+        }
+        self.assertEqual(wp_index.parse_public_types(types_json), ["posts", "pages"])
+
+
 if __name__ == "__main__":
     unittest.main()

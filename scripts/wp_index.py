@@ -158,5 +158,26 @@ def html_to_markdown(html_str):
     return text.strip()
 
 
+def resolve_author(item, users_by_id):
+    author_id = item.get("author")
+    if users_by_id and author_id in users_by_id:
+        return users_by_id[author_id]
+    embedded = (item.get("_embedded") or {}).get("author")
+    if embedded and isinstance(embedded, list) and embedded[0].get("name"):
+        return embedded[0]["name"]
+    if author_id is not None:
+        return "Author %s" % author_id
+    return "Unknown"
+
+
+def parse_public_types(types_json):
+    bases = []
+    for slug, entry in (types_json or {}).items():
+        base = (entry or {}).get("rest_base")
+        if base and slug != "attachment":
+            bases.append(base)
+    return bases
+
+
 if __name__ == "__main__":
     sys.exit(0)

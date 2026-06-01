@@ -202,5 +202,46 @@ class TestCheckpoints(unittest.TestCase):
             self.assertIsNone(wp_index.load_checkpoint(d, "items_posts"))
 
 
+from unittest import mock
+
+
+class TestHttp(unittest.TestCase):
+    def test_build_headers_public(self):
+        headers = wp_index.build_headers(None, None)
+        self.assertIn("User-Agent", headers)
+        self.assertNotIn("Authorization", headers)
+
+    def test_build_headers_auth(self):
+        headers = wp_index.build_headers("user", "app pass")
+        self.assertTrue(headers["Authorization"].startswith("Basic "))
+
+    def test_fetch_json_parses_body_and_headers(self):
+        fake = mock.MagicMock()
+        fake.read.return_value = b'{"hello": "world"}'
+        fake.headers.items.return_value = [("X-WP-TotalPages", "3")]
+        cm = mock.MagicMock()
+        cm.__enter__.return_value = fake
+        with mock.patch("wp_index.urllib.request.urlopen", return_value=cm):
+            data, headers = wp_index.fetch_json("https://x/wp-json/wp/v2/posts", {})
+        self.assertEqual(data, {"hello": "world"})
+        self.assertEqual(headers.get("x-wp-totalpages"), "3")
+
+    def test_fetch_all_paginates(self):
+        pages = {
+            1: ([{"id": 1}, {"id": 2}], {"x-wp-totalpages": "2"}),
+            2: ([{"id": 3}], {"x-wp-totalpages": "2"}),
+        }
+        seq = {"n": 0}
+
+        def fake_fetch(url, headers, **kw):
+            seq["n"] += 1
+            return pages[seq["n"]]
+
+        with mock.patch("wp_index.fetch_json", side_effect=fake_fetch), \
+             mock.patch("wp_index.time.sleep"):
+            items = wp_index.fetch_all("https://x/wp-json/wp/v2", "posts", {}, per_page=50, delay=0)
+        self.assertEqual([i["id"] for i in items], [1, 2, 3])
+
+
 if __name__ == "__main__":
     unittest.main()

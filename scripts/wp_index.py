@@ -340,5 +340,97 @@ def clear_checkpoints(checkpoint_dir):
                 os.remove(os.path.join(checkpoint_dir, name))
 
 
+USER_AGENT = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+)
+
+
+def build_headers(user=None, app_password=None):
+    headers = {"User-Agent": USER_AGENT, "Accept": "application/json"}
+    if user and app_password:
+        token = base64.b64encode(("%s:%s" % (user, app_password)).encode()).decode()
+        headers["Authorization"] = "Basic %s" % token
+    return headers
+
+
+def fetch_json(url, headers, max_retries=4, delay=1.0):
+    last_err = None
+    for attempt in range(max_retries):
+        request = urllib.request.Request(url, headers=headers)
+        try:
+            with urllib.request.urlopen(request, timeout=60) as resp:
+                body = resp.read().decode("utf-8")
+                resp_headers = {k.lower(): v for k, v in resp.headers.items()}
+                return json.loads(body), resp_headers
+        except urllib.error.HTTPError as err:
+            if err.code in (429, 500, 502, 503, 504):
+                retry_after = err.headers.get("Retry-After") if err.headers else None
+                wait = float(retry_after) if retry_after else delay * (2 ** attempt)
+                last_err = err
+                time.sleep(min(wait, 30))
+                continue
+            raise
+        except urllib.error.URLError as err:
+            last_err = err
+            time.sleep(delay * (2 ** attempt))
+    raise last_err
+
+
+def fetch_all(api_base, rest_base, headers, per_page=50, delay=1.0,
+              include_drafts=False, log=lambda m: None):
+    items = []
+    page = 1
+    status = "any" if include_drafts else "publish"
+    while True:
+        params = {"per_page": per_page, "page": page, "_embed": "1", "status": status}
+        url = "%s/%s?%s" % (api_base, rest_base, urllib.parse.urlencode(params))
+        try:
+            data, resp_headers = fetch_json(url, headers, delay=delay)
+        except urllib.error.HTTPError as err:
+            if err.code == 400:  # page beyond total
+                break
+            raise
+        if not data:
+            break
+        items.extend(data)
+        total_pages = int(resp_headers.get("x-wp-totalpages", "1") or "1")
+        log("  %s page %d/%d (+%d)" % (rest_base, page, total_pages, len(data)))
+        if page >= total_pages:
+            break
+        page += 1
+        time.sleep(delay)
+    return items
+
+
+def fetch_users(api_base, headers, delay=1.0):
+    users = {}
+    page = 1
+    while True:
+        url = "%s/users?%s" % (api_base, urllib.parse.urlencode({"per_page": 100, "page": page}))
+        try:
+            data, resp_headers = fetch_json(url, headers, delay=delay)
+        except urllib.error.HTTPError:
+            break
+        if not data:
+            break
+        for user in data:
+            users[user.get("id")] = user.get("name", "")
+        total_pages = int(resp_headers.get("x-wp-totalpages", "1") or "1")
+        if page >= total_pages:
+            break
+        page += 1
+        time.sleep(delay)
+    return users
+
+
+def detect_rest_api(api_base, headers):
+    try:
+        data, _ = fetch_json(api_base, headers)
+        return isinstance(data, dict) and "routes" in data
+    except Exception:
+        return False
+
+
 if __name__ == "__main__":
     sys.exit(0)

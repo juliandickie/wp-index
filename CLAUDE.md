@@ -16,17 +16,19 @@ Generalised from `idd-blog-index/extract-wp-blogs.py`. All iDD-specific logic (f
 
 ## Running the tests
 
-Unit tests (fast, no network):
+Unit tests (fast, no network beyond a localhost fake server):
 
 ```bash
 python3 -m unittest discover -s test -p "test_*.py" -v
 ```
 
-Smoke test (import check, --help, and the full unit suite):
+Smoke test (import check, --help, and the full unit suite including e2e):
 
 ```bash
 ./test/smoke.test.sh
 ```
+
+CI runs the smoke test on Python 3.9, 3.12, and 3.14 via `.github/workflows/tests.yml` on every push to main and every PR.
 
 ## Key files
 
@@ -38,6 +40,10 @@ Smoke test (import check, --help, and the full unit suite):
 
 - `commands/wp-index.md` - the `/wp-index` slash command
 
-- `test/test_wp_index.py` - unit tests covering pure functions and mocked HTTP
+- `test/test_wp_index.py` - unit tests covering pure functions, mocked HTTP, and `main()` validation
 
-- `test/smoke.test.sh` - shell smoke test
+- `test/test_e2e.py` - end-to-end tests running `main()` against a fake WordPress REST server on localhost and checking the real output files
+
+- `test/smoke.test.sh` - shell smoke test (runs the whole unittest suite, e2e included)
+
+- `.github/workflows/tests.yml` - CI, runs the smoke test on Python 3.9 / 3.12 / 3.14

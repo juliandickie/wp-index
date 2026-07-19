@@ -94,9 +94,10 @@ Output lands in `./example.com-wp-index/` by default. The full layout is below.
     2024-03-15_my-slug.md  one file per post, YAML frontmatter + Markdown body
   pages/
     2024-01-10_about.md
+  orphaned/                files whose items disappeared from the site (moved, not deleted)
 ```
 
-The run resumes safely from checkpoints if interrupted. Use `--fresh` to start over.
+The run resumes from checkpoints if interrupted, at per-post-type granularity, and clears them after a completed run so the next one fetches fresh data. Use `--fresh` to force a refetch at any time.
 
 ## Authentication - Application Passwords
 

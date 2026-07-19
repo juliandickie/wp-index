@@ -123,6 +123,20 @@ class TestHtml(unittest.TestCase):
             "![Lazy](https://x.com/l.png)",
         )
 
+    def test_iframe_becomes_embed_link(self):
+        self.assertEqual(
+            wp_index.html_to_markdown(
+                '<p>watch</p><iframe src="https://www.youtube.com/embed/abc"></iframe>'
+            ),
+            "watch\n\n[embedded content](https://www.youtube.com/embed/abc)",
+        )
+
+    def test_iframe_without_src_emits_nothing(self):
+        self.assertEqual(
+            wp_index.html_to_markdown('<p>a</p><iframe></iframe><p>b</p>'),
+            "a\n\nb",
+        )
+
     def test_script_contents_suppressed(self):
         self.assertEqual(
             wp_index.html_to_markdown("<p>a</p><script>var x = 1;</script><p>b</p>"),
@@ -561,6 +575,61 @@ class TestHttp(unittest.TestCase):
         err = wp_index.urllib.error.HTTPError("u", 401, "nope", {}, None)
         with mock.patch("wp_index.fetch_json", side_effect=err):
             self.assertFalse(wp_index.verify_auth("https://x/wp-json/wp/v2", {}))
+
+    def test_fetch_users_continues_without_totalpages_header(self):
+        # same stripped-header trap as fetch_all: users must not truncate at page 1
+        pages = {
+            1: ([{"id": 1, "name": "A"}], {}),
+            2: ([], {}),
+        }
+        seq = {"n": 0}
+
+        def fake_fetch(url, headers, **kw):
+            seq["n"] += 1
+            return pages[seq["n"]]
+
+        with mock.patch("wp_index.fetch_json", side_effect=fake_fetch), \
+             mock.patch("wp_index.time.sleep"):
+            users = wp_index.fetch_users("https://x/wp-json/wp/v2", {}, delay=0)
+        self.assertEqual(users, {1: "A"})
+        self.assertEqual(seq["n"], 2)
+
+
+class TestOrphans(unittest.TestCase):
+    def _write(self, dirpath, name, text="x"):
+        with open(os.path.join(dirpath, name), "w", encoding="utf-8") as f:
+            f.write(text)
+
+    def test_stale_md_moved_fresh_kept(self):
+        with tempfile.TemporaryDirectory() as d:
+            type_dir = os.path.join(d, "posts")
+            os.makedirs(type_dir)
+            self._write(type_dir, "2024-01-01_fresh.md")
+            self._write(type_dir, "2023-01-01_gone.md")
+            orphan_root = os.path.join(d, "orphaned")
+            moved = wp_index.reconcile_orphans(
+                type_dir, [os.path.join(type_dir, "2024-01-01_fresh.md")], orphan_root)
+            self.assertEqual(moved, ["2023-01-01_gone.md"])
+            self.assertTrue(os.path.isfile(os.path.join(type_dir, "2024-01-01_fresh.md")))
+            self.assertFalse(os.path.exists(os.path.join(type_dir, "2023-01-01_gone.md")))
+            self.assertTrue(os.path.isfile(
+                os.path.join(orphan_root, "posts", "2023-01-01_gone.md")))
+            self.assertTrue(os.path.isfile(os.path.join(orphan_root, "README.md")))
+
+    def test_non_md_files_ignored(self):
+        with tempfile.TemporaryDirectory() as d:
+            type_dir = os.path.join(d, "posts")
+            os.makedirs(type_dir)
+            self._write(type_dir, "notes.txt")
+            moved = wp_index.reconcile_orphans(type_dir, [], os.path.join(d, "orphaned"))
+            self.assertEqual(moved, [])
+            self.assertTrue(os.path.isfile(os.path.join(type_dir, "notes.txt")))
+
+    def test_missing_dir_is_noop(self):
+        with tempfile.TemporaryDirectory() as d:
+            moved = wp_index.reconcile_orphans(
+                os.path.join(d, "nope"), [], os.path.join(d, "orphaned"))
+            self.assertEqual(moved, [])
 
 
 class TestKnowledgeBaseWriter(unittest.TestCase):

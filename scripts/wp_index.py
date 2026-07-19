@@ -172,6 +172,12 @@ class _MarkdownParser(HTMLParser):
             src = attr_map.get("src") or attr_map.get("data-src") or ""
             if src:
                 self._emit("![%s](%s)" % (attr_map.get("alt") or "", src))
+        elif tag == "iframe":
+            # YouTube/Vimeo embeds carry no inner text; without this the video
+            # would vanish from the extraction entirely
+            src = dict(attrs).get("src") or ""
+            if src:
+                self._emit("\n\n[embedded content](%s)\n\n" % src)
         elif tag == "pre":
             self._in_pre = True
             self._emit("\n\n```\n")
@@ -453,6 +459,45 @@ def write_markdown_files(out_dir, type_name, records):
     return paths
 
 
+ORPHAN_README = (
+    "# Orphaned files\n\n"
+    "These Markdown files were written by earlier wp-index runs but no longer\n"
+    "correspond to any item on the site (the post was deleted, or its slug or\n"
+    "date changed, so it now lives under a new filename). They are moved here\n"
+    "at the end of each run instead of being deleted, in case the removal was\n"
+    "a mistake. Safe to delete this folder once you have checked them.\n"
+)
+
+
+def reconcile_orphans(type_dir, written_paths, orphan_root):
+    """Move stale Markdown files out of a type directory.
+
+    Anything in type_dir that this run did not write no longer matches an item
+    on the site. Moved (never deleted) into orphan_root/<type>/ so a
+    long-lived output directory cannot silently drift from reality.
+    """
+    moved = []
+    if not os.path.isdir(type_dir):
+        return moved
+    written = {os.path.realpath(p) for p in written_paths}
+    for name in sorted(os.listdir(type_dir)):
+        path = os.path.join(type_dir, name)
+        if not name.endswith(".md") or not os.path.isfile(path):
+            continue
+        if os.path.realpath(path) in written:
+            continue
+        dest_dir = os.path.join(orphan_root, os.path.basename(type_dir))
+        os.makedirs(dest_dir, exist_ok=True)
+        os.rename(path, os.path.join(dest_dir, name))
+        moved.append(name)
+    if moved:
+        readme = os.path.join(orphan_root, "README.md")
+        if not os.path.exists(readme):
+            with open(readme, "w", encoding="utf-8") as f:
+                f.write(ORPHAN_README)
+    return moved
+
+
 # Claude project knowledge works best with files well under a few MB; split the
 # knowledge base at item boundaries once it would exceed this
 KB_CHUNK_BYTES = 1_500_000
@@ -520,6 +565,10 @@ def checkpoint_path(checkpoint_dir, name):
 
 
 def save_checkpoint(checkpoint_dir, name, items):
+    # Checkpoints are per-type, written only after a type fully completes, so
+    # an interrupted run restarts the in-flight type from page 1. Per-page
+    # resume was considered and consciously deferred: it only pays off at
+    # multi-thousand-item scale on a single type.
     os.makedirs(checkpoint_dir, exist_ok=True)
     payload = {
         "fetched_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -560,6 +609,10 @@ def clear_checkpoints(checkpoint_dir):
             pass
 
 
+# Deliberate Chrome spoof rather than an honest UA: several WAF setups block
+# python-urllib's default agent outright, and reliability against arbitrary
+# third-party sites wins over etiquette here. Documented so it is a choice,
+# not an oversight.
 USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
@@ -672,8 +725,13 @@ def fetch_users(api_base, headers, delay=1.0):
             break
         for user in data:
             users[user.get("id")] = user.get("name", "")
-        total_pages = int(resp_headers.get("x-wp-totalpages", "1") or "1")
-        if page >= total_pages:
+        # mirror fetch_all: a stripped X-WP-TotalPages header must not silently
+        # stop pagination after page 1; keep going until an empty page
+        try:
+            total_pages = int(resp_headers.get("x-wp-totalpages", ""))
+        except ValueError:
+            total_pages = None
+        if total_pages and page >= total_pages:
             break
         page += 1
         time.sleep(delay)
@@ -814,7 +872,13 @@ def main(argv=None):
         # the archive is the backup surface; keep the raw API items so nothing
         # (custom fields, media ids, taxonomy, original HTML) is lost
         archive["types"][rest_base] = raw_items
-        write_markdown_files(out_dir, safe_type, records)
+        written = write_markdown_files(out_dir, safe_type, records)
+        moved = reconcile_orphans(
+            os.path.join(out_dir, safe_type), written,
+            os.path.join(out_dir, "orphaned"))
+        if moved:
+            print("  %s: %d orphaned file(s) moved to orphaned/%s/ "
+                  "(no longer on the site)" % (rest_base, len(moved), safe_type))
         write_csv(out_dir, safe_type, records)
         print("  %s: %d items" % (rest_base, len(records)))
 

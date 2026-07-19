@@ -29,7 +29,7 @@ Common variations:
 
 - Flag stale content - `--since 2025-01-01`.
 
-- Re-run from scratch - `--fresh` (otherwise it resumes from checkpoints).
+- Re-run from scratch - `--fresh` (checkpoints only survive an interrupted or failed run; a completed run clears them and refetches next time).
 
 - Include drafts and private items - `--drafts` (requires auth, see below).
 
@@ -58,6 +58,8 @@ Written under the output directory (default `./<domain>-wp-index`):
 
 - `<type>/YYYY-MM-DD_slug.md` - one Markdown file per item.
 
+- `orphaned/<type>/` - Markdown files from earlier runs whose items no longer exist on the site (moved here, not deleted).
+
 The SEO score uses the real Yoast meta description when the site exposes one; otherwise it scores the excerpt as a proxy, and the `seo_meta_source` column records which one was scored.
 
-The run is read-only against the site and resumes safely if interrupted. It uses a one-second default delay between requests to stay polite; raise it with `--delay` on rate-limited hosts.
+The run is read-only against the site. If interrupted it resumes from the last fully fetched post type, and a completed run clears its checkpoints so the next run fetches fresh data. It uses a one-second default delay between requests to stay polite; raise it with `--delay` on rate-limited hosts.

@@ -12,5 +12,8 @@ venv/
 # OS
 .DS_Store
 
+# Tooling state (oh-my-claudecode)
+.omc/
+
 # Local-only design notes (spec, plan) — kept on disk, out of the published repo
 docs/

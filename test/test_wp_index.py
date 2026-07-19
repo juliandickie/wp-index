@@ -154,6 +154,35 @@ class TestHtml(unittest.TestCase):
         self.assertIn("https://a.com", got)
         self.assertIn("https://b.com", got)
 
+    def test_table_becomes_markdown_table(self):
+        html_in = ("<table><tr><th>Feature</th><th>Value</th></tr>"
+                   "<tr><td>Speed</td><td>Fast</td></tr></table>")
+        self.assertEqual(
+            wp_index.html_to_markdown(html_in),
+            "| Feature | Value |\n| --- | --- |\n| Speed | Fast |",
+        )
+
+    def test_table_cell_pipes_escaped_and_formatting_kept(self):
+        html_in = "<table><tr><td>a|b</td><td><strong>x</strong></td></tr></table>"
+        got = wp_index.html_to_markdown(html_in)
+        self.assertIn("a\\|b", got)
+        self.assertIn("**x**", got)
+
+    def test_table_inside_prose(self):
+        html_in = "<p>before</p><table><tr><td>cell</td></tr></table><p>after</p>"
+        got = wp_index.html_to_markdown(html_in)
+        self.assertIn("before", got)
+        self.assertIn("| cell |", got)
+        self.assertIn("after", got)
+
+    def test_nested_unordered_list_indented(self):
+        html_in = "<ul><li>one<ul><li>sub</li></ul></li><li>two</li></ul>"
+        self.assertEqual(wp_index.html_to_markdown(html_in), "- one\n  - sub\n- two")
+
+    def test_nested_ordered_list_indented(self):
+        html_in = "<ol><li>a<ol><li>b</li></ol></li></ol>"
+        self.assertEqual(wp_index.html_to_markdown(html_in), "1. a\n   1. b")
+
 
 class TestAuthorAndTypes(unittest.TestCase):
     def test_author_from_map(self):
@@ -216,6 +245,54 @@ class TestBuildRecord(unittest.TestCase):
         record = wp_index.build_record(self._load(), "posts", {}, None, False)
         self.assertNotIn("seo_score", record)
 
+    def test_terms_media_and_yoast_captured(self):
+        item = self._load()
+        item["_embedded"] = {
+            "wp:term": [[{"taxonomy": "category", "name": "News"}],
+                        [{"taxonomy": "post_tag", "name": "AI"}]],
+            "wp:featuredmedia": [{"source_url": "https://x.com/f.jpg"}],
+        }
+        item["yoast_head_json"] = {"description": "d" * 100}
+        record = wp_index.build_record(item, "posts", {}, None, True)
+        self.assertEqual(record["categories"], ["News"])
+        self.assertEqual(record["tags"], ["AI"])
+        self.assertEqual(record["featured_image"], "https://x.com/f.jpg")
+        self.assertEqual(record["seo_meta_source"], "yoast")
+
+    def test_yoast_description_is_scored(self):
+        item = self._load()
+        item["yoast_head_json"] = {"description": "d" * 100}
+        with_yoast = wp_index.build_record(item, "posts", {}, None, True)
+        without = wp_index.build_record(self._load(), "posts", {}, None, True)
+        self.assertEqual(without["seo_meta_source"], "excerpt")
+        # fixture excerpt is 26 chars (+20); the yoast description is 100 (+40)
+        self.assertEqual(with_yoast["seo_score"] - without["seo_score"], 20)
+
+
+class TestMetadataExtraction(unittest.TestCase):
+    def test_extract_terms(self):
+        item = {"_embedded": {"wp:term": [
+            [{"taxonomy": "category", "name": "News"},
+             {"taxonomy": "category", "name": "Tech"}],
+            [{"taxonomy": "post_tag", "name": "AI"}],
+            "not-a-list",
+        ]}}
+        categories, tags = wp_index.extract_terms(item)
+        self.assertEqual(categories, ["News", "Tech"])
+        self.assertEqual(tags, ["AI"])
+
+    def test_extract_terms_absent(self):
+        self.assertEqual(wp_index.extract_terms({}), ([], []))
+
+    def test_extract_featured_image(self):
+        item = {"_embedded": {"wp:featuredmedia": [{"source_url": "https://x.com/f.jpg"}]}}
+        self.assertEqual(wp_index.extract_featured_image(item), "https://x.com/f.jpg")
+
+    def test_extract_featured_image_forbidden_shape(self):
+        # protected media embeds as an error object with no source_url
+        item = {"_embedded": {"wp:featuredmedia": [{"code": "rest_forbidden"}]}}
+        self.assertEqual(wp_index.extract_featured_image(item), "")
+
 
 def _sample_record():
     return {
@@ -248,6 +325,26 @@ class TestRenderers(unittest.TestCase):
         rec["url"] = "https://x.com/?a=1: 2"
         md = wp_index.markdown_for_record(rec)
         self.assertIn('url: "https://x.com/?a=1: 2"', md)
+
+    def test_frontmatter_includes_terms_and_image(self):
+        rec = _sample_record()
+        rec["categories"] = ["News", "Tech"]
+        rec["tags"] = ["AI"]
+        rec["featured_image"] = "https://x.com/f.jpg"
+        rec["seo_meta_source"] = "excerpt"
+        md = wp_index.markdown_for_record(rec)
+        self.assertIn('categories: ["News", "Tech"]', md)
+        self.assertIn('tags: ["AI"]', md)
+        self.assertIn('featured_image: "https://x.com/f.jpg"', md)
+        self.assertIn("seo_meta_source: excerpt", md)
+
+    def test_knowledge_base_lists_terms(self):
+        rec = _sample_record()
+        rec["categories"] = ["News"]
+        rec["tags"] = ["AI", "Dental"]
+        kb = wp_index.knowledge_base_markdown([rec])
+        self.assertIn("- Categories: News", kb)
+        self.assertIn("- Tags: AI, Dental", kb)
 
 
 class TestWriters(unittest.TestCase):
@@ -299,6 +396,21 @@ class TestWriters(unittest.TestCase):
             rec["date"] = "banana2024-03"
             paths = wp_index.write_markdown_files(d, "posts", [rec])
             self.assertEqual(os.path.basename(paths[0]), "sample.md")
+
+    def test_flatten_joins_list_fields(self):
+        row = wp_index.flatten_for_table({"categories": ["A", "B"], "tags": [], "id": 1})
+        self.assertEqual(row["categories"], "A; B")
+        self.assertEqual(row["tags"], "")
+        self.assertEqual(row["id"], 1)
+
+    def test_csv_includes_joined_categories(self):
+        rec = _sample_record()
+        rec["categories"] = ["News", "Tech"]
+        with tempfile.TemporaryDirectory() as d:
+            path = wp_index.write_csv(d, "posts", [rec])
+            with open(path, encoding="utf-8") as f:
+                rows = list(csv.DictReader(f))
+        self.assertEqual(rows[0]["categories"], "News; Tech")
 
 
 class TestCheckpoints(unittest.TestCase):

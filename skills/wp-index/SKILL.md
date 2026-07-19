@@ -48,14 +48,16 @@ Setting up the Application Password is the one step that commonly trips people u
 
 Written under the output directory (default `./<domain>-wp-index`):
 
-- `index/<type>-index.csv` - one row per item.
+- `index/<type>-index.csv` - one row per item (title, author, categories, tags, featured image, SEO score).
 
-- `index/archive.json` - full JSON backup.
+- `index/archive.json` - full JSON backup of the raw REST API items, exactly as the site returned them.
 
 - `index/knowledge-base.md` - a single Markdown file for Claude project knowledge.
 
 - `index/index.xlsx` - only if openpyxl is installed.
 
 - `<type>/YYYY-MM-DD_slug.md` - one Markdown file per item.
+
+The SEO score uses the real Yoast meta description when the site exposes one; otherwise it scores the excerpt as a proxy, and the `seo_meta_source` column records which one was scored.
 
 The run is read-only against the site and resumes safely if interrupted. It uses a one-second default delay between requests to stay polite; raise it with `--delay` on rate-limited hosts.

@@ -106,6 +106,18 @@ def is_stale(modified_iso, since_date):
     return modified < threshold
 
 
+def _render_table_rows(rows):
+    rows = [r for r in rows if r]
+    if not rows:
+        return ""
+    width = max(len(r) for r in rows)
+    rows = [r + [""] * (width - len(r)) for r in rows]
+    lines = ["| " + " | ".join(rows[0]) + " |", "|" + " --- |" * width]
+    for r in rows[1:]:
+        lines.append("| " + " | ".join(r) + " |")
+    return "\n\n" + "\n".join(lines) + "\n"
+
+
 class _MarkdownParser(HTMLParser):
     def __init__(self):
         super().__init__(convert_charrefs=True)
@@ -114,6 +126,16 @@ class _MarkdownParser(HTMLParser):
         self._href_stack = []
         self._suppress = 0
         self._in_pre = False
+        self._table = None
+
+    def _emit(self, text):
+        # inside a table, output belongs to the current cell; text between
+        # cells (whitespace, stray markup) is dropped
+        if self._table is not None:
+            if self._table["cell"] is not None:
+                self._table["cell"].append(text)
+        else:
+            self.parts.append(text)
 
     def handle_starttag(self, tag, attrs):
         if tag in ("script", "style"):
@@ -122,37 +144,52 @@ class _MarkdownParser(HTMLParser):
         if self._suppress:
             return
         if tag in ("strong", "b"):
-            self.parts.append("**")
+            self._emit("**")
         elif tag in ("em", "i"):
-            self.parts.append("*")
+            self._emit("*")
         elif tag in ("h1", "h2", "h3", "h4", "h5", "h6"):
-            self.parts.append("\n\n" + "#" * int(tag[1]) + " ")
+            self._emit("\n\n" + "#" * int(tag[1]) + " ")
         elif tag == "p":
-            self.parts.append("\n\n")
+            self._emit("\n\n")
         elif tag == "br":
-            self.parts.append("\n")
+            self._emit("\n")
         elif tag == "blockquote":
-            self.parts.append("\n\n> ")
+            self._emit("\n\n> ")
         elif tag in ("ul", "ol"):
+            if not self._list_stack:
+                self._emit("\n")
             self._list_stack.append(tag)
-            self.parts.append("\n")
         elif tag == "li":
+            # indent by the marker width of each ancestor list ("- " vs "1. ")
+            indent = "".join("  " if t == "ul" else "   " for t in self._list_stack[:-1])
             ordered = self._list_stack[-1:] == ["ol"]
-            self.parts.append("\n" + ("1. " if ordered else "- "))
+            self._emit("\n" + indent + ("1. " if ordered else "- "))
         elif tag == "a":
             self._href_stack.append(dict(attrs).get("href"))
-            self.parts.append("[")
+            self._emit("[")
         elif tag == "img":
             attr_map = dict(attrs)
             src = attr_map.get("src") or attr_map.get("data-src") or ""
             if src:
-                self.parts.append("![%s](%s)" % (attr_map.get("alt") or "", src))
+                self._emit("![%s](%s)" % (attr_map.get("alt") or "", src))
         elif tag == "pre":
             self._in_pre = True
-            self.parts.append("\n\n```\n")
+            self._emit("\n\n```\n")
         elif tag == "code":
             if not self._in_pre:
-                self.parts.append("`")
+                self._emit("`")
+        elif tag == "table":
+            if self._table is None:
+                self._table = {"rows": [], "cell": None}
+        elif tag == "tr":
+            if self._table is not None:
+                self._table["cell"] = None
+                self._table["rows"].append([])
+        elif tag in ("td", "th"):
+            if self._table is not None:
+                if not self._table["rows"]:
+                    self._table["rows"].append([])
+                self._table["cell"] = []
 
     def handle_endtag(self, tag):
         if tag in ("script", "style"):
@@ -162,30 +199,42 @@ class _MarkdownParser(HTMLParser):
         if self._suppress:
             return
         if tag in ("strong", "b"):
-            self.parts.append("**")
+            self._emit("**")
         elif tag in ("em", "i"):
-            self.parts.append("*")
+            self._emit("*")
         elif tag in ("h1", "h2", "h3", "h4", "h5", "h6"):
-            self.parts.append("\n")
+            self._emit("\n")
         elif tag == "p":
-            self.parts.append("\n")
+            self._emit("\n")
         elif tag in ("ul", "ol"):
             if self._list_stack:
                 self._list_stack.pop()
-            self.parts.append("\n")
+            if not self._list_stack:
+                self._emit("\n")
         elif tag == "a":
             href = self._href_stack.pop() if self._href_stack else None
-            self.parts.append("](%s)" % (href or ""))
+            self._emit("](%s)" % (href or ""))
         elif tag == "pre":
             self._in_pre = False
-            self.parts.append("\n```\n")
+            self._emit("\n```\n")
         elif tag == "code":
             if not self._in_pre:
-                self.parts.append("`")
+                self._emit("`")
+        elif tag in ("td", "th"):
+            if self._table is not None and self._table["cell"] is not None:
+                text = re.sub(r"\s+", " ", "".join(self._table["cell"])).strip()
+                self._table["rows"][-1].append(text.replace("|", "\\|"))
+                self._table["cell"] = None
+        elif tag == "table":
+            if self._table is not None:
+                rendered = _render_table_rows(self._table["rows"])
+                self._table = None
+                if rendered:
+                    self.parts.append(rendered)
 
     def handle_data(self, data):
         if not self._suppress:
-            self.parts.append(data)
+            self._emit(data)
 
 
 def html_to_markdown(html_str):
@@ -232,6 +281,28 @@ def parse_public_types(types_json):
     return bases
 
 
+def extract_terms(item):
+    categories, tags = [], []
+    for group in ((item.get("_embedded") or {}).get("wp:term") or []):
+        if not isinstance(group, list):
+            continue
+        for term in group:
+            if not isinstance(term, dict) or not term.get("name"):
+                continue
+            if term.get("taxonomy") == "category":
+                categories.append(term["name"])
+            elif term.get("taxonomy") == "post_tag":
+                tags.append(term["name"])
+    return categories, tags
+
+
+def extract_featured_image(item):
+    media = (item.get("_embedded") or {}).get("wp:featuredmedia")
+    if isinstance(media, list) and media and isinstance(media[0], dict):
+        return media[0].get("source_url") or ""
+    return ""
+
+
 def build_record(item, type_name, users_by_id, since_date, do_score):
     title = html.unescape((item.get("title") or {}).get("rendered", "") or "")
     content_html = (item.get("content") or {}).get("rendered", "") or ""
@@ -239,6 +310,7 @@ def build_record(item, type_name, users_by_id, since_date, do_score):
     slug = item.get("slug", "") or ""
     content_md = html_to_markdown(content_html)
     excerpt_md = html_to_markdown(excerpt_html)
+    categories, tags = extract_terms(item)
 
     record = {
         "id": item.get("id"),
@@ -250,22 +322,39 @@ def build_record(item, type_name, users_by_id, since_date, do_score):
         "date": item.get("date", ""),
         "modified": item.get("modified", ""),
         "author": resolve_author(item, users_by_id),
+        "categories": categories,
+        "tags": tags,
+        "featured_image": extract_featured_image(item),
         "excerpt": excerpt_md,
         "word_count": len(content_md.split()),
         "content_markdown": content_md,
         "stale": is_stale(item.get("modified", ""), since_date),
     }
     if do_score:
-        score, grade = score_seo(title, excerpt_md, slug)
+        # Yoast exposes the real meta description in the default REST response;
+        # without it the excerpt is only a proxy, so label which one was scored
+        yoast_desc = (item.get("yoast_head_json") or {}).get("description") or ""
+        meta = yoast_desc or excerpt_md
+        score, grade = score_seo(title, meta, slug)
         record["seo_score"] = score
         record["seo_grade"] = grade
+        record["seo_meta_source"] = "yoast" if yoast_desc else "excerpt"
     return record
 
 
 CSV_FIELDS = [
     "id", "type", "title", "slug", "status", "url", "date", "modified",
-    "author", "word_count", "seo_score", "seo_grade", "stale",
+    "author", "categories", "tags", "featured_image", "word_count",
+    "seo_score", "seo_grade", "seo_meta_source", "stale",
 ]
+
+
+def flatten_for_table(record):
+    row = dict(record)
+    for key in ("categories", "tags"):
+        if isinstance(row.get(key), list):
+            row[key] = "; ".join(row[key])
+    return row
 
 
 def markdown_for_record(record):
@@ -279,9 +368,17 @@ def markdown_for_record(record):
     lines.append("date: %s" % record.get("date", ""))
     lines.append("modified: %s" % record.get("modified", ""))
     lines.append("author: %s" % json.dumps(record.get("author", "")))
+    if record.get("categories"):
+        lines.append("categories: %s" % json.dumps(record["categories"], ensure_ascii=False))
+    if record.get("tags"):
+        lines.append("tags: %s" % json.dumps(record["tags"], ensure_ascii=False))
+    if record.get("featured_image"):
+        lines.append("featured_image: %s" % json.dumps(record["featured_image"]))
     if "seo_score" in record:
         lines.append("seo_score: %s" % record["seo_score"])
         lines.append("seo_grade: %s" % record["seo_grade"])
+        if record.get("seo_meta_source"):
+            lines.append("seo_meta_source: %s" % record["seo_meta_source"])
     lines.append("stale: %s" % ("true" if record.get("stale") else "false"))
     lines.append("---")
     body = "# %s\n\n%s\n" % (record.get("title", ""), record.get("content_markdown", ""))
@@ -296,6 +393,10 @@ def knowledge_base_markdown(records):
         lines.append("- Type: %s" % r.get("type", ""))
         lines.append("- URL: %s" % r.get("url", ""))
         lines.append("- Author: %s" % r.get("author", ""))
+        if r.get("categories"):
+            lines.append("- Categories: %s" % ", ".join(r["categories"]))
+        if r.get("tags"):
+            lines.append("- Tags: %s" % ", ".join(r["tags"]))
         if "seo_grade" in r:
             lines.append("- SEO: %s (%s)" % (r.get("seo_score"), r.get("seo_grade")))
         lines.append("")
@@ -312,7 +413,7 @@ def write_csv(out_dir, type_name, records):
         writer = csv.DictWriter(f, fieldnames=CSV_FIELDS, extrasaction="ignore")
         writer.writeheader()
         for r in records:
-            writer.writerow(r)
+            writer.writerow(flatten_for_table(r))
     return path
 
 
@@ -367,7 +468,8 @@ def write_xlsx_if_available(out_dir, records_by_type):
         sheet = workbook.create_sheet(title=(type_name[:31] or "sheet"))
         sheet.append(CSV_FIELDS)
         for r in records:
-            sheet.append([r.get(k, "") for k in CSV_FIELDS])
+            row = flatten_for_table(r)
+            sheet.append([row.get(k, "") for k in CSV_FIELDS])
     path = os.path.join(out_dir, "index", "index.xlsx")
     os.makedirs(os.path.dirname(path), exist_ok=True)
     workbook.save(path)
@@ -661,7 +763,9 @@ def main(argv=None):
             except Exception as err:
                 print("  WARNING: skipped %s item id=%s (%s)" % (rest_base, item.get("id"), err))
         records_by_type[safe_type] = records
-        archive["types"][rest_base] = records
+        # the archive is the backup surface; keep the raw API items so nothing
+        # (custom fields, media ids, taxonomy, original HTML) is lost
+        archive["types"][rest_base] = raw_items
         write_markdown_files(out_dir, safe_type, records)
         write_csv(out_dir, safe_type, records)
         print("  %s: %d items" % (rest_base, len(records)))

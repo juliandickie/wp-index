@@ -52,7 +52,7 @@ Written under the output directory (default `./<domain>-wp-index`):
 
 - `index/archive.json` - full JSON backup of the raw REST API items, exactly as the site returned them.
 
-- `index/knowledge-base.md` - a single Markdown file for Claude project knowledge.
+- `index/knowledge-base.md` - a single Markdown file for Claude project knowledge. On very large sites it becomes numbered parts (`knowledge-base-01.md`, ...) so each file stays ingestible.
 
 - `index/index.xlsx` - only if openpyxl is installed.
 

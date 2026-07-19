@@ -385,25 +385,29 @@ def markdown_for_record(record):
     return "\n".join(lines) + "\n\n" + body
 
 
-def knowledge_base_markdown(records):
-    lines = ["# Content Knowledge Base", "", "Total items: %d" % len(records), ""]
-    for r in records:
-        lines.append("## %s" % r.get("title", ""))
+def kb_entry_markdown(r):
+    lines = ["## %s" % r.get("title", ""), ""]
+    lines.append("- Type: %s" % r.get("type", ""))
+    lines.append("- URL: %s" % r.get("url", ""))
+    lines.append("- Author: %s" % r.get("author", ""))
+    if r.get("categories"):
+        lines.append("- Categories: %s" % ", ".join(r["categories"]))
+    if r.get("tags"):
+        lines.append("- Tags: %s" % ", ".join(r["tags"]))
+    if "seo_grade" in r:
+        lines.append("- SEO: %s (%s)" % (r.get("seo_score"), r.get("seo_grade")))
+    lines.append("")
+    if r.get("excerpt"):
+        lines.append(r["excerpt"])
         lines.append("")
-        lines.append("- Type: %s" % r.get("type", ""))
-        lines.append("- URL: %s" % r.get("url", ""))
-        lines.append("- Author: %s" % r.get("author", ""))
-        if r.get("categories"):
-            lines.append("- Categories: %s" % ", ".join(r["categories"]))
-        if r.get("tags"):
-            lines.append("- Tags: %s" % ", ".join(r["tags"]))
-        if "seo_grade" in r:
-            lines.append("- SEO: %s (%s)" % (r.get("seo_score"), r.get("seo_grade")))
-        lines.append("")
-        if r.get("excerpt"):
-            lines.append(r["excerpt"])
-            lines.append("")
     return "\n".join(lines)
+
+
+def knowledge_base_markdown(records, title="Content Knowledge Base"):
+    parts = ["# %s" % title, "", "Total items: %d" % len(records), ""]
+    for r in records:
+        parts.append(kb_entry_markdown(r))
+    return "\n".join(parts)
 
 
 def write_csv(out_dir, type_name, records):
@@ -449,12 +453,47 @@ def write_markdown_files(out_dir, type_name, records):
     return paths
 
 
-def write_knowledge_base(out_dir, records):
-    path = os.path.join(out_dir, "index", "knowledge-base.md")
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
-        f.write(knowledge_base_markdown(records))
-    return path
+# Claude project knowledge works best with files well under a few MB; split the
+# knowledge base at item boundaries once it would exceed this
+KB_CHUNK_BYTES = 1_500_000
+
+
+def write_knowledge_base(out_dir, records, max_bytes=KB_CHUNK_BYTES):
+    index_dir = os.path.join(out_dir, "index")
+    os.makedirs(index_dir, exist_ok=True)
+    # remove both single and part files from earlier runs so a rerun that
+    # changes shape (split vs single) leaves no stale copy behind
+    for name in os.listdir(index_dir):
+        if name == "knowledge-base.md" or re.match(r"^knowledge-base-\d+\.md$", name):
+            os.remove(os.path.join(index_dir, name))
+
+    full = knowledge_base_markdown(records)
+    if len(full.encode("utf-8")) <= max_bytes:
+        path = os.path.join(index_dir, "knowledge-base.md")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(full)
+        return [path]
+
+    chunks = []
+    current, current_bytes = [], 0
+    for r in records:
+        entry_bytes = len(kb_entry_markdown(r).encode("utf-8")) + 1
+        if current and current_bytes + entry_bytes > max_bytes:
+            chunks.append(current)
+            current, current_bytes = [], 0
+        current.append(r)
+        current_bytes += entry_bytes
+    if current:
+        chunks.append(current)
+
+    paths = []
+    for i, chunk in enumerate(chunks, 1):
+        title = "Content Knowledge Base (part %d of %d)" % (i, len(chunks))
+        path = os.path.join(index_dir, "knowledge-base-%02d.md" % i)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(knowledge_base_markdown(chunk, title=title))
+        paths.append(path)
+    return paths
 
 
 def write_xlsx_if_available(out_dir, records_by_type):
@@ -578,6 +617,7 @@ def fetch_json(url, headers, max_retries=4, delay=1.0):
 def fetch_all(api_base, rest_base, headers, per_page=50, delay=1.0,
               include_drafts=False, log=lambda m: None):
     items = []
+    seen_ids = set()
     page = 1
     status = "any" if include_drafts else "publish"
     while True:
@@ -591,7 +631,15 @@ def fetch_all(api_base, rest_base, headers, per_page=50, delay=1.0,
             raise
         if not data:
             break
-        items.extend(data)
+        # a post published mid-crawl shifts pagination, so later pages can
+        # repeat items already seen; keep the first copy of each id
+        for item in data:
+            item_id = item.get("id") if isinstance(item, dict) else None
+            if item_id is not None:
+                if item_id in seen_ids:
+                    continue
+                seen_ids.add(item_id)
+            items.append(item)
         try:
             total_pages = int(resp_headers.get("x-wp-totalpages", ""))
         except ValueError:
@@ -772,7 +820,9 @@ def main(argv=None):
 
     all_records = [r for records in records_by_type.values() for r in records]
     write_json_archive(out_dir, archive)
-    write_knowledge_base(out_dir, all_records)
+    kb_paths = write_knowledge_base(out_dir, all_records)
+    if len(kb_paths) > 1:
+        print("  NOTE: knowledge base split into %d parts to stay ingestible." % len(kb_paths))
     xlsx_path = write_xlsx_if_available(out_dir, records_by_type)
 
     # checkpoints exist to resume an interrupted run; after a fully successful one

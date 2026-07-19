@@ -536,6 +536,23 @@ class TestHttp(unittest.TestCase):
             items = wp_index.fetch_all("https://x/wp-json/wp/v2", "posts", {}, per_page=50, delay=0)
         self.assertEqual([i["id"] for i in items], [1, 2, 3])
 
+    def test_fetch_all_dedupes_shifted_pages(self):
+        # a post published mid-crawl shifts pagination; id 2 appears on both pages
+        pages = {
+            1: ([{"id": 1}, {"id": 2}], {"x-wp-totalpages": "2"}),
+            2: ([{"id": 2}, {"id": 3}], {"x-wp-totalpages": "2"}),
+        }
+        seq = {"n": 0}
+
+        def fake_fetch(url, headers, **kw):
+            seq["n"] += 1
+            return pages[seq["n"]]
+
+        with mock.patch("wp_index.fetch_json", side_effect=fake_fetch), \
+             mock.patch("wp_index.time.sleep"):
+            items = wp_index.fetch_all("https://x/wp-json/wp/v2", "posts", {}, per_page=2, delay=0)
+        self.assertEqual([i["id"] for i in items], [1, 2, 3])
+
     def test_verify_auth_accepts_valid_user(self):
         with mock.patch("wp_index.fetch_json", return_value=({"id": 5, "name": "j"}, {})):
             self.assertTrue(wp_index.verify_auth("https://x/wp-json/wp/v2", {}))
@@ -544,6 +561,45 @@ class TestHttp(unittest.TestCase):
         err = wp_index.urllib.error.HTTPError("u", 401, "nope", {}, None)
         with mock.patch("wp_index.fetch_json", side_effect=err):
             self.assertFalse(wp_index.verify_auth("https://x/wp-json/wp/v2", {}))
+
+
+class TestKnowledgeBaseWriter(unittest.TestCase):
+    def _records(self, n):
+        records = []
+        for i in range(n):
+            rec = _sample_record()
+            rec["id"] = 100 + i
+            rec["title"] = "Post %d" % i
+            records.append(rec)
+        return records
+
+    def test_single_file_under_limit(self):
+        with tempfile.TemporaryDirectory() as d:
+            paths = wp_index.write_knowledge_base(d, self._records(3))
+            self.assertEqual(len(paths), 1)
+            self.assertTrue(paths[0].endswith("knowledge-base.md"))
+            self.assertTrue(os.path.isfile(paths[0]))
+
+    def test_splits_when_over_limit(self):
+        with tempfile.TemporaryDirectory() as d:
+            paths = wp_index.write_knowledge_base(d, self._records(6), max_bytes=300)
+            self.assertGreater(len(paths), 1)
+            self.assertFalse(os.path.isfile(os.path.join(d, "index", "knowledge-base.md")))
+            for p in paths:
+                self.assertTrue(os.path.isfile(p))
+            first = open(paths[0], encoding="utf-8").read()
+            self.assertIn("part 1 of %d" % len(paths), first)
+
+    def test_rerun_cleans_stale_shape(self):
+        # a split run followed by a single-file run must not leave old parts behind
+        with tempfile.TemporaryDirectory() as d:
+            split = wp_index.write_knowledge_base(d, self._records(6), max_bytes=300)
+            self.assertGreater(len(split), 1)
+            single = wp_index.write_knowledge_base(d, self._records(2))
+            self.assertEqual(len(single), 1)
+            leftovers = [n for n in os.listdir(os.path.join(d, "index"))
+                         if n.startswith("knowledge-base-")]
+            self.assertEqual(leftovers, [])
 
 
 class TestMainValidation(unittest.TestCase):

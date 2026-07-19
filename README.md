@@ -88,6 +88,7 @@ Output lands in `./example.com-wp-index/` by default. The full layout is below.
     pages-index.csv        one row per page
     archive.json           full JSON backup of every item
     knowledge-base.md      single Markdown file for Claude project knowledge
+                           (numbered parts on very large sites)
     index.xlsx             only written if openpyxl is installed
   posts/
     2024-03-15_my-slug.md  one file per post, YAML frontmatter + Markdown body

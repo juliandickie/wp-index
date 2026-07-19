@@ -16,7 +16,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from datetime import datetime
+from datetime import datetime, timezone
 from html.parser import HTMLParser
 
 
@@ -27,6 +27,20 @@ def slugify(text, max_length=80):
     if len(text) > max_length:
         text = text[:max_length].rstrip("-")
     return text
+
+
+def safe_path_part(text, max_length=80):
+    """Sanitise a remote-supplied value (slug, rest_base) for use as a path component.
+
+    Slugs and rest_base values come from the remote site's JSON and must never be
+    able to escape the output directory (slashes, "..") or contain characters the
+    filesystem or openpyxl reject.
+    """
+    text = re.sub(r"[^A-Za-z0-9._-]+", "-", text or "")
+    text = re.sub(r"-{2,}", "-", text).strip("-.")
+    if ".." in text:
+        text = text.replace("..", ".")
+    return text[:max_length]
 
 
 def grade_for_score(score):
@@ -97,9 +111,16 @@ class _MarkdownParser(HTMLParser):
         super().__init__(convert_charrefs=True)
         self.parts = []
         self._list_stack = []
-        self._href = None
+        self._href_stack = []
+        self._suppress = 0
+        self._in_pre = False
 
     def handle_starttag(self, tag, attrs):
+        if tag in ("script", "style"):
+            self._suppress += 1
+            return
+        if self._suppress:
+            return
         if tag in ("strong", "b"):
             self.parts.append("**")
         elif tag in ("em", "i"):
@@ -119,12 +140,27 @@ class _MarkdownParser(HTMLParser):
             ordered = self._list_stack[-1:] == ["ol"]
             self.parts.append("\n" + ("1. " if ordered else "- "))
         elif tag == "a":
-            self._href = dict(attrs).get("href")
+            self._href_stack.append(dict(attrs).get("href"))
             self.parts.append("[")
-        elif tag in ("code", "pre"):
-            self.parts.append("`")
+        elif tag == "img":
+            attr_map = dict(attrs)
+            src = attr_map.get("src") or attr_map.get("data-src") or ""
+            if src:
+                self.parts.append("![%s](%s)" % (attr_map.get("alt") or "", src))
+        elif tag == "pre":
+            self._in_pre = True
+            self.parts.append("\n\n```\n")
+        elif tag == "code":
+            if not self._in_pre:
+                self.parts.append("`")
 
     def handle_endtag(self, tag):
+        if tag in ("script", "style"):
+            if self._suppress:
+                self._suppress -= 1
+            return
+        if self._suppress:
+            return
         if tag in ("strong", "b"):
             self.parts.append("**")
         elif tag in ("em", "i"):
@@ -138,13 +174,18 @@ class _MarkdownParser(HTMLParser):
                 self._list_stack.pop()
             self.parts.append("\n")
         elif tag == "a":
-            self.parts.append("](%s)" % (self._href or ""))
-            self._href = None
-        elif tag in ("code", "pre"):
-            self.parts.append("`")
+            href = self._href_stack.pop() if self._href_stack else None
+            self.parts.append("](%s)" % (href or ""))
+        elif tag == "pre":
+            self._in_pre = False
+            self.parts.append("\n```\n")
+        elif tag == "code":
+            if not self._in_pre:
+                self.parts.append("`")
 
     def handle_data(self, data):
-        self.parts.append(data)
+        if not self._suppress:
+            self.parts.append(data)
 
 
 def html_to_markdown(html_str):
@@ -152,6 +193,7 @@ def html_to_markdown(html_str):
         return ""
     parser = _MarkdownParser()
     parser.feed(html_str)
+    parser.close()
     text = "".join(parser.parts)
     text = re.sub(r"[ \t]+\n", "\n", text)
     text = re.sub(r"\n{3,}", "\n\n", text)
@@ -170,12 +212,23 @@ def resolve_author(item, users_by_id):
     return "Unknown"
 
 
+# attachment is media, not content; nav_menu_item and the wp_-prefixed internal
+# types (templates, reusable blocks, global styles, fonts) are listed publicly by
+# /types but their collection endpoints require auth, so --type all would spray
+# per-type 401s. Types outside the wp/v2 namespace are unreachable from api_base.
+SKIPPED_TYPE_SLUGS = {"attachment", "nav_menu_item"}
+
+
 def parse_public_types(types_json):
     bases = []
     for slug, entry in (types_json or {}).items():
-        base = (entry or {}).get("rest_base")
-        if base and slug != "attachment":
-            bases.append(base)
+        entry = entry or {}
+        base = entry.get("rest_base")
+        if not base or slug in SKIPPED_TYPE_SLUGS or slug.startswith("wp_"):
+            continue
+        if entry.get("rest_namespace", "wp/v2") != "wp/v2":
+            continue
+        bases.append(base)
     return bases
 
 
@@ -277,8 +330,12 @@ def write_markdown_files(out_dir, type_name, records):
     paths = []
     used = set()
     for r in records:
+        # date and slug come from the remote site; sanitise before they touch paths
         date_part = (r.get("date") or "")[:10]
-        slug = r.get("slug") or slugify(r.get("title", "")) or str(r.get("id"))
+        if not re.match(r"^\d{4}-\d{2}-\d{2}$", date_part):
+            date_part = ""
+        slug = (safe_path_part(r.get("slug", ""))
+                or slugify(r.get("title", "")) or str(r.get("id")))
         base = ("%s_%s" % (date_part, slug)) if date_part else slug
         name = base + ".md"
         if name in used:
@@ -321,21 +378,34 @@ def checkpoint_path(checkpoint_dir, name):
     return os.path.join(checkpoint_dir, "%s.json" % name)
 
 
-def save_checkpoint(checkpoint_dir, name, data):
+def save_checkpoint(checkpoint_dir, name, items):
     os.makedirs(checkpoint_dir, exist_ok=True)
+    payload = {
+        "fetched_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "items": items,
+    }
     with open(checkpoint_path(checkpoint_dir, name), "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, default=str)
+        json.dump(payload, f, ensure_ascii=False, default=str)
 
 
 def load_checkpoint(checkpoint_dir, name):
+    """Return {"items": [...], "fetched_at": str-or-None}, or None if absent/corrupt.
+
+    Pre-0.2 checkpoints were a bare item list with no timestamp; accept both.
+    """
     path = checkpoint_path(checkpoint_dir, name)
     if not os.path.exists(path):
         return None
     try:
         with open(path, encoding="utf-8") as f:
-            return json.load(f)
+            data = json.load(f)
     except (json.JSONDecodeError, IOError):
         return None
+    if isinstance(data, dict) and "items" in data:
+        return {"items": data["items"], "fetched_at": data.get("fetched_at")}
+    if isinstance(data, list):
+        return {"items": data, "fetched_at": None}
+    return None
 
 
 def clear_checkpoints(checkpoint_dir):
@@ -343,6 +413,10 @@ def clear_checkpoints(checkpoint_dir):
         for name in os.listdir(checkpoint_dir):
             if name.endswith(".json"):
                 os.remove(os.path.join(checkpoint_dir, name))
+        try:
+            os.rmdir(checkpoint_dir)
+        except OSError:
+            pass
 
 
 USER_AGENT = (
@@ -370,11 +444,21 @@ def fetch_json(url, headers, max_retries=4, delay=1.0):
             with urllib.request.urlopen(request, timeout=REQUEST_TIMEOUT) as resp:
                 body = resp.read().decode("utf-8")
                 resp_headers = {k.lower(): v for k, v in resp.headers.items()}
-                return json.loads(body), resp_headers
+                try:
+                    return json.loads(body), resp_headers
+                except json.JSONDecodeError:
+                    raise ValueError(
+                        "non-JSON response from %s (bot challenge or maintenance page?)"
+                        % url
+                    ) from None
         except urllib.error.HTTPError as err:
             if err.code in (429, 500, 502, 503, 504):
                 retry_after = err.headers.get("Retry-After") if err.headers else None
-                wait = float(retry_after) if retry_after else delay * (2 ** attempt)
+                try:
+                    wait = float(retry_after)
+                except (TypeError, ValueError):
+                    # Retry-After may be an HTTP date rather than seconds
+                    wait = delay * (2 ** attempt)
                 last_err = err
                 time.sleep(min(wait, 30))
                 continue
@@ -406,10 +490,20 @@ def fetch_all(api_base, rest_base, headers, per_page=50, delay=1.0,
         if not data:
             break
         items.extend(data)
-        total_pages = int(resp_headers.get("x-wp-totalpages", "1") or "1")
-        log("  %s page %d/%d (+%d)" % (rest_base, page, total_pages, len(data)))
-        if page >= total_pages:
-            break
+        try:
+            total_pages = int(resp_headers.get("x-wp-totalpages", ""))
+        except ValueError:
+            total_pages = None
+        if total_pages:
+            log("  %s page %d/%d (+%d)" % (rest_base, page, total_pages, len(data)))
+            if page >= total_pages:
+                break
+        else:
+            # Some proxies strip X-WP-TotalPages; without it, keep paging until an
+            # empty page or the 400 "page beyond total" rather than silently
+            # stopping after page 1.
+            log("  %s page %d/? (+%d; no X-WP-TotalPages header)"
+                % (rest_base, page, len(data)))
         page += 1
         time.sleep(delay)
     return items
@@ -422,7 +516,7 @@ def fetch_users(api_base, headers, delay=1.0):
         url = "%s/users?%s" % (api_base, urllib.parse.urlencode({"per_page": 100, "page": page}))
         try:
             data, resp_headers = fetch_json(url, headers, delay=delay)
-        except urllib.error.HTTPError:
+        except (urllib.error.HTTPError, ValueError):
             break
         if not data:
             break
@@ -441,6 +535,20 @@ def detect_rest_api(api_base, headers):
         data, _ = fetch_json(api_base, headers)
         return isinstance(data, dict) and "routes" in data
     except Exception:
+        return False
+
+
+def verify_auth(api_base, headers):
+    """Preflight the credentials against /users/me.
+
+    WordPress rejects every REST request (including public ones) when an invalid
+    Application Password is presented, so bad credentials must be caught up front
+    or they masquerade as "not a WordPress site".
+    """
+    try:
+        data, _ = fetch_json("%s/users/me" % api_base, headers)
+        return isinstance(data, dict) and "id" in data
+    except (urllib.error.HTTPError, ValueError):
         return False
 
 
@@ -472,6 +580,10 @@ def main(argv=None):
         print("  NOTE: --per-page capped at 100 (WordPress maximum); using 100.")
         args.per_page = 100
 
+    if args.since and parse_wp_date(args.since) is None:
+        print("ERROR: --since must be a date in YYYY-MM-DD form (got %r)." % args.since)
+        return 2
+
     user = os.environ.get("WP_USER")
     app_password = os.environ.get("WP_APP_PASSWORD")
     auth_enabled = bool(user and app_password)
@@ -483,7 +595,20 @@ def main(argv=None):
     if not detect_rest_api(api_base, headers):
         print("ERROR: %s does not look like a REST-enabled WordPress site "
               "(no /wp-json/wp/v2)." % site)
+        if auth_enabled:
+            print("  NOTE: WordPress rejects every REST request when WP_USER / "
+                  "WP_APP_PASSWORD are invalid; try unsetting them to test public access.")
         return 2
+
+    if auth_enabled and not verify_auth(api_base, headers):
+        if args.drafts:
+            print("ERROR: WP_USER / WP_APP_PASSWORD were rejected (/users/me failed); "
+                  "--drafts needs valid credentials.")
+            return 2
+        print("WARNING: WP_USER / WP_APP_PASSWORD were rejected (/users/me failed); "
+              "continuing in public mode.")
+        auth_enabled = False
+        headers = build_headers(None, None)
 
     if args.fresh:
         clear_checkpoints(checkpoint_dir)
@@ -503,11 +628,19 @@ def main(argv=None):
     archive = {"site": site, "types": {}}
     records_by_type = {}
     failed_types = []
+    seen_safe = set()
     for rest_base in rest_bases:
-        cached = None if args.fresh else load_checkpoint(checkpoint_dir, "items_%s" % rest_base)
+        # rest_base can come from the remote /types endpoint; use a sanitised
+        # variant wherever it becomes a directory, file, or sheet name
+        safe_type = safe_path_part(rest_base) or "type"
+        if safe_type in seen_safe:
+            safe_type = "%s-%d" % (safe_type, len(seen_safe))
+        seen_safe.add(safe_type)
+        cached = None if args.fresh else load_checkpoint(checkpoint_dir, "items_%s" % safe_type)
         if cached is not None:
-            raw_items = cached
-            print("  Loaded checkpoint for %s (%d items)" % (rest_base, len(raw_items)))
+            raw_items = cached["items"]
+            print("  Loaded checkpoint for %s (%d items, fetched %s); use --fresh to refetch."
+                  % (rest_base, len(raw_items), cached.get("fetched_at") or "unknown time"))
         else:
             try:
                 raw_items = fetch_all(
@@ -518,7 +651,7 @@ def main(argv=None):
                 print("  ERROR: failed to fetch %s after retries (%s); skipping this type." % (rest_base, err))
                 failed_types.append(rest_base)
                 continue
-            save_checkpoint(checkpoint_dir, "items_%s" % rest_base, raw_items)
+            save_checkpoint(checkpoint_dir, "items_%s" % safe_type, raw_items)
         records = []
         for item in raw_items:
             try:
@@ -527,16 +660,21 @@ def main(argv=None):
                 )
             except Exception as err:
                 print("  WARNING: skipped %s item id=%s (%s)" % (rest_base, item.get("id"), err))
-        records_by_type[rest_base] = records
+        records_by_type[safe_type] = records
         archive["types"][rest_base] = records
-        write_markdown_files(out_dir, rest_base, records)
-        write_csv(out_dir, rest_base, records)
+        write_markdown_files(out_dir, safe_type, records)
+        write_csv(out_dir, safe_type, records)
         print("  %s: %d items" % (rest_base, len(records)))
 
     all_records = [r for records in records_by_type.values() for r in records]
     write_json_archive(out_dir, archive)
     write_knowledge_base(out_dir, all_records)
     xlsx_path = write_xlsx_if_available(out_dir, records_by_type)
+
+    # checkpoints exist to resume an interrupted run; after a fully successful one
+    # they would only serve stale data on the next invocation
+    if not failed_types:
+        clear_checkpoints(checkpoint_dir)
 
     print("\nDone. %d items across %d type(s) -> %s"
           % (len(all_records), len(records_by_type), out_dir))

@@ -131,6 +131,15 @@ class TestHtml(unittest.TestCase):
             "watch\n\n[embedded content](https://www.youtube.com/embed/abc)",
         )
 
+    def test_iframe_lazy_data_src(self):
+        # cookie-consent plugins swap src for data-src until consent is given
+        self.assertEqual(
+            wp_index.html_to_markdown(
+                '<iframe data-src="https://www.youtube.com/embed/gated"></iframe>'
+            ),
+            "[embedded content](https://www.youtube.com/embed/gated)",
+        )
+
     def test_iframe_without_src_emits_nothing(self):
         self.assertEqual(
             wp_index.html_to_markdown('<p>a</p><iframe></iframe><p>b</p>'),
@@ -630,6 +639,17 @@ class TestOrphans(unittest.TestCase):
             moved = wp_index.reconcile_orphans(
                 os.path.join(d, "nope"), [], os.path.join(d, "orphaned"))
             self.assertEqual(moved, [])
+
+    def test_orphan_root_named_like_type_never_collides(self):
+        # a rest_base that sanitised to the orphan root's own name must not
+        # have its files moved into itself
+        with tempfile.TemporaryDirectory() as d:
+            type_dir = os.path.join(d, "orphaned")
+            os.makedirs(type_dir)
+            self._write(type_dir, "2024-01-01_anything.md")
+            moved = wp_index.reconcile_orphans(type_dir, [], type_dir)
+            self.assertEqual(moved, [])
+            self.assertTrue(os.path.isfile(os.path.join(type_dir, "2024-01-01_anything.md")))
 
 
 class TestKnowledgeBaseWriter(unittest.TestCase):

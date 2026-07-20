@@ -174,8 +174,10 @@ class _MarkdownParser(HTMLParser):
                 self._emit("![%s](%s)" % (attr_map.get("alt") or "", src))
         elif tag == "iframe":
             # YouTube/Vimeo embeds carry no inner text; without this the video
-            # would vanish from the extraction entirely
-            src = dict(attrs).get("src") or ""
+            # would vanish from the extraction entirely. data-src parity with
+            # img: cookie-consent plugins gate the real src behind consent.
+            attr_map = dict(attrs)
+            src = attr_map.get("src") or attr_map.get("data-src") or ""
             if src:
                 self._emit("\n\n[embedded content](%s)\n\n" % src)
         elif tag == "pre":
@@ -461,23 +463,31 @@ def write_markdown_files(out_dir, type_name, records):
 
 ORPHAN_README = (
     "# Orphaned files\n\n"
-    "These Markdown files were written by earlier wp-index runs but no longer\n"
-    "correspond to any item on the site (the post was deleted, or its slug or\n"
-    "date changed, so it now lives under a new filename). They are moved here\n"
-    "at the end of each run instead of being deleted, in case the removal was\n"
-    "a mistake. Safe to delete this folder once you have checked them.\n"
+    "These Markdown files were written by earlier wp-index runs but were no\n"
+    "longer visible to the run that moved them: the post was deleted, made\n"
+    "private or reverted to draft (visible only with --drafts and auth), or\n"
+    "its slug or date changed so it now lives under a new filename. They are\n"
+    "moved here at the end of each run instead of being deleted, in case the\n"
+    "removal was a mistake. Safe to delete this folder once you have checked\n"
+    "them.\n"
 )
 
 
 def reconcile_orphans(type_dir, written_paths, orphan_root):
     """Move stale Markdown files out of a type directory.
 
-    Anything in type_dir that this run did not write no longer matches an item
-    on the site. Moved (never deleted) into orphan_root/<type>/ so a
-    long-lived output directory cannot silently drift from reality.
+    Anything in type_dir that this run did not write is no longer visible to
+    this run (deleted, private/draft without auth, or renamed). Moved, never
+    deleted, into orphan_root/<type>/ so a long-lived output directory cannot
+    silently drift from reality.
     """
     moved = []
     if not os.path.isdir(type_dir):
+        return moved
+    if os.path.realpath(type_dir) == os.path.realpath(orphan_root):
+        # a type whose rest_base sanitises to the orphan root's own name;
+        # reconciling it would move its files into itself. No real WordPress
+        # type does this, but never collide on purpose.
         return moved
     written = {os.path.realpath(p) for p in written_paths}
     for name in sorted(os.listdir(type_dir)):
@@ -878,7 +888,7 @@ def main(argv=None):
             os.path.join(out_dir, "orphaned"))
         if moved:
             print("  %s: %d orphaned file(s) moved to orphaned/%s/ "
-                  "(no longer on the site)" % (rest_base, len(moved), safe_type))
+                  "(no longer visible to this run)" % (rest_base, len(moved), safe_type))
         write_csv(out_dir, safe_type, records)
         print("  %s: %d items" % (rest_base, len(records)))
 

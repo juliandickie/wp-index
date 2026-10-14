@@ -6,7 +6,7 @@
   },
   "metadata": {
     "description": "Extract and index any WordPress site via its REST API.",
-    "version": "0.2.2"
+    "version": "0.2.3"
   },
   "plugins": [
     {

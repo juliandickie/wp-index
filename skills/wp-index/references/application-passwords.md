@@ -98,6 +98,14 @@ curl --user "USERNAME:APP PASSWORD" https://your-site.com/wp-json/wp/v2/users/me
 
 A 200 response with your user details as JSON means the password works. A 401 means either the credential is wrong or the `Authorization` header is being stripped (see step 7 above).
 
+Some security plugins block `/users/me` to stop user enumeration, usually with a 302 redirect to the homepage, even when the password is valid. On those sites, check with a draft-posts query instead:
+
+```
+curl --user "USERNAME:APP PASSWORD" "https://your-site.com/wp-json/wp/v2/posts?status=draft&per_page=1"
+```
+
+A JSON list (empty is fine) means the password works. Without valid credentials WordPress answers this with a 400 `rest_invalid_param`. `wp-index` runs the same two checks in this order before every authenticated run, so a blocked `/users/me` alone does not stop it.
+
 ## Using least privilege
 
 An Application Password inherits the full capabilities of the user it belongs to. Because `wp-index` only reads (it never writes to your site), you do not need an Administrator. Where possible, create or use an Editor-level account, give the password a clear name, and revoke it when the extraction work is done. This keeps the blast radius small if the credential is ever exposed.

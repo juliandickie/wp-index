@@ -757,15 +757,24 @@ def detect_rest_api(api_base, headers):
 
 
 def verify_auth(api_base, headers):
-    """Preflight the credentials against /users/me.
+    """Preflight the credentials against /users/me, then a draft-posts query.
 
     WordPress rejects every REST request (including public ones) when an invalid
     Application Password is presented, so bad credentials must be caught up front
-    or they masquerade as "not a WordPress site".
+    or they masquerade as "not a WordPress site". Some security plugins block
+    /users/me to stop user enumeration (a 302 to the homepage), so a failed
+    /users/me falls back to status=draft, which WordPress answers with a JSON
+    list only for an authenticated user who can edit posts (anonymous gets 400).
     """
     try:
         data, _ = fetch_json("%s/users/me" % api_base, headers)
-        return isinstance(data, dict) and "id" in data
+        if isinstance(data, dict) and "id" in data:
+            return True
+    except (urllib.error.HTTPError, ValueError):
+        pass
+    try:
+        data, _ = fetch_json("%s/posts?status=draft&per_page=1" % api_base, headers)
+        return isinstance(data, list)
     except (urllib.error.HTTPError, ValueError):
         return False
 
@@ -820,11 +829,11 @@ def main(argv=None):
 
     if auth_enabled and not verify_auth(api_base, headers):
         if args.drafts:
-            print("ERROR: WP_USER / WP_APP_PASSWORD were rejected (/users/me failed); "
-                  "--drafts needs valid credentials.")
+            print("ERROR: WP_USER / WP_APP_PASSWORD were rejected (/users/me and the "
+                  "draft-posts check both failed); --drafts needs valid credentials.")
             return 2
-        print("WARNING: WP_USER / WP_APP_PASSWORD were rejected (/users/me failed); "
-              "continuing in public mode.")
+        print("WARNING: WP_USER / WP_APP_PASSWORD were rejected (/users/me and the "
+              "draft-posts check both failed); continuing in public mode.")
         auth_enabled = False
         headers = build_headers(None, None)
 

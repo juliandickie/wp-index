@@ -581,8 +581,33 @@ class TestHttp(unittest.TestCase):
             self.assertTrue(wp_index.verify_auth("https://x/wp-json/wp/v2", {}))
 
     def test_verify_auth_rejects_401(self):
+        # a bad password makes WordPress 401 every REST request, the fallback included
         err = wp_index.urllib.error.HTTPError("u", 401, "nope", {}, None)
-        with mock.patch("wp_index.fetch_json", side_effect=err):
+        with mock.patch("wp_index.fetch_json", side_effect=err) as fake:
+            self.assertFalse(wp_index.verify_auth("https://x/wp-json/wp/v2", {}))
+        urls = [c.args[0] for c in fake.call_args_list]
+        self.assertEqual(urls, ["https://x/wp-json/wp/v2/users/me",
+                                "https://x/wp-json/wp/v2/posts?status=draft&per_page=1"])
+
+    def test_verify_auth_falls_back_when_users_me_redirects(self):
+        # a security plugin 302s /users/me to the homepage; urllib follows it and
+        # fetch_json raises ValueError on the HTML, but the draft query still answers
+        def fake_fetch(url, headers, **kw):
+            if url.endswith("/users/me"):
+                raise ValueError("non-JSON response from %s" % url)
+            return [], {}
+
+        with mock.patch("wp_index.fetch_json", side_effect=fake_fetch):
+            self.assertTrue(wp_index.verify_auth("https://x/wp-json/wp/v2", {}))
+
+    def test_verify_auth_rejects_draft_query_400(self):
+        # without valid credentials WordPress answers status=draft with 400 rest_invalid_param
+        def fake_fetch(url, headers, **kw):
+            if url.endswith("/users/me"):
+                raise ValueError("non-JSON response from %s" % url)
+            raise wp_index.urllib.error.HTTPError(url, 400, "rest_invalid_param", {}, None)
+
+        with mock.patch("wp_index.fetch_json", side_effect=fake_fetch):
             self.assertFalse(wp_index.verify_auth("https://x/wp-json/wp/v2", {}))
 
     def test_fetch_users_continues_without_totalpages_header(self):

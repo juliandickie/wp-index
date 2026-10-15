@@ -4,6 +4,18 @@ Dated, additive notes from using wp-index in the field. Newest first. These are 
 
 ---
 
+## 2026-10-15 - a blocked users endpoint leaves every author as "Author N"
+
+**Found in** pro-marketing-web-agency, clients/wide-bay-kids/research/ingest/, against widebaykids.com.au (v0.2.2, then v0.2.3).
+
+**Behaviour.** The site's security plugin answers /wp-json/wp/v2/users and /users/me with a 302 to the homepage, even for a valid Application Password, and anonymous requests get a 403 at the host's edge. 0.2.3 already handles the credential check by falling back to a draft-posts query. But `fetch_users` still returns an empty map, and `_embedded.author` is empty too, so `resolve_author` writes "Author 10" on 2,165 of 2,361 items. welcometobundaberg.com, on the same host and plugins, did embed the author name, so the embed is not reliably blocked.
+
+**Downstream workaround.** The client's launcher (`wbk_wp_index.py`) wraps `fetch_users` to fall back to an `authors.json` map of id to name, read from the public bylines (`rel="author"` links, or schema.org `"@type":"Person","name"` in the page). It gave three names for four ids. The fourth owned only store pages with no byline.
+
+**Possible fix.** When `fetch_users` comes back empty, collect one published post URL per unresolved author id and read the byline from the page HTML, or accept an `--authors <file.json>` map. Either way, say in the run summary how many items fell back to "Author N", because today it is silent.
+
+---
+
 ## 2026-08-04 - `reconcile_orphans` sweeps non-content files into `orphaned/`
 
 **Found in** `idd-blog-index`, running v0.2.2 vendored, against both the main site and the academy.
